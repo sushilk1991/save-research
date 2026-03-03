@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Save Research — Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Save Research</h1>
+      <p class="subtitle">Configure your collections, folders, and AI enrichment</p>
+    </header>
+
+    <!-- Collections -->
+    <section class="card">
+      <h2>Collections</h2>
+      <p class="hint">Each collection saves to a subfolder inside your Downloads directory.</p>
+      <div id="collections-list"></div>
+      <button id="add-collection" class="btn btn-secondary">+ Add Collection</button>
+    </section>
+
+    <!-- Folder Organization -->
+    <section class="card">
+      <h2>Folder Organization</h2>
+
+      <div class="setting-row">
+        <div>
+          <label for="organize-by-type">Organize by Content Type</label>
+          <p class="hint">Sort saves into typed subfolders within each collection</p>
+        </div>
+        <input type="checkbox" id="organize-by-type" class="toggle">
+      </div>
+
+      <div id="folder-names" class="folder-names-grid">
+        <div class="folder-row">
+          <label>Images</label>
+          <div class="folder-input compact">
+            <span class="folder-prefix">.../</span>
+            <input type="text" id="folder-images" placeholder="images">
+          </div>
+        </div>
+        <div class="folder-row">
+          <label>Pages & Links</label>
+          <div class="folder-input compact">
+            <span class="folder-prefix">.../</span>
+            <input type="text" id="folder-pages" placeholder="pages">
+          </div>
+        </div>
+        <div class="folder-row">
+          <label>Media (video/audio)</label>
+          <div class="folder-input compact">
+            <span class="folder-prefix">.../</span>
+            <input type="text" id="folder-media" placeholder="media">
+          </div>
+        </div>
+        <div class="folder-row">
+          <label>Selections & Notes</label>
+          <div class="folder-input compact">
+            <span class="folder-prefix">.../</span>
+            <input type="text" id="folder-notes" placeholder="notes">
+          </div>
+        </div>
+        <div class="folder-row">
+          <label>Documents (PDF, etc.)</label>
+          <div class="folder-input compact">
+            <span class="folder-prefix">.../</span>
+            <input type="text" id="folder-documents" placeholder="documents">
+          </div>
+        </div>
+      </div>
+
+      <p class="hint folder-preview" id="folder-preview"></p>
+    </section>
+
+    <!-- Markdown Conversion -->
+    <section class="card">
+      <h2>Markdown Conversion</h2>
+      <div class="setting-row">
+        <div>
+          <label for="markdown-method">Conversion Method</label>
+          <p class="hint">How to convert web pages to Markdown files</p>
+        </div>
+        <select id="markdown-method">
+          <option value="markdownnew">markdown.new (recommended)</option>
+          <option value="jina">Jina Reader API (fallback)</option>
+          <option value="builtin">Built-in converter (offline, fastest)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- AI Enrichment -->
+    <section class="card">
+      <h2>AI Enrichment <span class="badge">Ollama</span></h2>
+      <p class="hint">Use a local Ollama model to auto-tag saved content with topics, summaries, and categories. These appear in the YAML frontmatter of your Markdown files.</p>
+
+      <div class="setting-row">
+        <div>
+          <label for="ai-enabled">Enable AI Tagging</label>
+          <p class="hint">Requires Ollama running locally</p>
+        </div>
+        <input type="checkbox" id="ai-enabled" class="toggle">
+      </div>
+
+      <div id="ai-settings" class="ai-settings">
+        <div class="setting-row">
+          <div>
+            <label for="ai-url">Ollama URL</label>
+          </div>
+          <input type="text" id="ai-url" class="text-input" placeholder="http://localhost:11434">
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <label for="ai-model">Model</label>
+            <p class="hint">Smaller = faster. Larger = better tags.</p>
+          </div>
+          <div class="model-input">
+            <input type="text" id="ai-model" class="text-input" placeholder="qwen3.5:4b">
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <button id="test-ollama" class="btn btn-test">Test Connection</button>
+          <span id="ollama-status" class="ollama-status"></span>
+        </div>
+
+        <div class="ai-preview">
+          <p class="hint">AI will add these fields to your saved Markdown frontmatter:</p>
+          <pre class="code-preview">---
+source: https://example.com/article
+saved: 2026-03-03T10:30:00Z
+ai_tags: [machine-learning, transformers, nlp]
+ai_summary: "Overview of attention mechanisms in modern language models."
+ai_category: research
+---</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- YouTube -->
+    <section class="card">
+      <h2>YouTube <span class="badge">Auto-detect</span></h2>
+      <p class="hint">Automatically detect YouTube URLs and extract video metadata, transcripts, and AI-generated summaries instead of generic page conversion.</p>
+
+      <div class="setting-row">
+        <div>
+          <label for="yt-enabled">Enable YouTube Detection</label>
+          <p class="hint">Auto-detect YouTube links and save rich video notes</p>
+        </div>
+        <input type="checkbox" id="yt-enabled" class="toggle">
+      </div>
+
+      <div class="setting-row">
+        <div>
+          <label for="yt-download">Download Video File</label>
+          <p class="hint">Also download the video via yt-dlp companion server</p>
+        </div>
+        <input type="checkbox" id="yt-download" class="toggle">
+      </div>
+
+      <div id="yt-companion-settings" class="ai-settings">
+        <div class="setting-row">
+          <div>
+            <label for="yt-companion-url">Companion Server URL</label>
+          </div>
+          <input type="text" id="yt-companion-url" class="text-input" placeholder="http://localhost:11435">
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <label for="yt-quality">Video Quality</label>
+          </div>
+          <select id="yt-quality">
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="audio-only">Audio only</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <button id="test-ytdlp" class="btn btn-test">Test Connection</button>
+          <span id="ytdlp-status" class="ollama-status"></span>
+        </div>
+      </div>
+
+      <div class="ai-preview">
+        <p class="hint">YouTube saves produce Markdown with video metadata and transcript:</p>
+        <pre class="code-preview">---
+source: https://youtube.com/watch?v=...
+type: youtube
+title: "Video Title"
+channel: "Channel Name"
+duration: "15:32"
+published: 2026-02-15
+ai_tags: [machine-learning, llm, tutorial]
+ai_summary: "Overview of attention mechanisms."
+ai_category: tutorial
+---
+
+# Video Title
+
+## Key Takeaways
+- First key point...
+
+## Transcript
+[00:00] First line...</pre>
+      </div>
+    </section>
+
+    <!-- Twitter/X -->
+    <section class="card">
+      <h2>Twitter / X <span class="badge">Auto-detect</span></h2>
+      <p class="hint">Automatically detect tweet URLs and extract tweet text, thread content, author info, media references, and AI-generated summaries instead of generic page conversion.</p>
+
+      <div class="setting-row">
+        <div>
+          <label for="tw-enabled">Enable Twitter/X Detection</label>
+          <p class="hint">Auto-detect tweet links and save rich tweet notes</p>
+        </div>
+        <input type="checkbox" id="tw-enabled" class="toggle">
+      </div>
+
+      <div class="setting-row">
+        <div>
+          <label for="tw-save-pdf">Save as PDF</label>
+          <p class="hint">Also generate a PDF with embedded media via the companion server (requires weasyprint)</p>
+        </div>
+        <input type="checkbox" id="tw-save-pdf" class="toggle">
+      </div>
+
+      <div class="ai-preview">
+        <p class="hint">Tweet saves produce Markdown with tweet metadata and thread content:</p>
+        <pre class="code-preview">---
+source: https://x.com/user/status/123456
+type: tweet
+author: "@username"
+author_name: "Display Name"
+posted: 2026-03-01T12:00:00Z
+ai_tags: [ai, llm, research]
+ai_summary: "Overview of new model capabilities."
+ai_category: news
+---
+
+# Tweet by Display Name
+
+Tweet text content here...
+
+![Tweet media](https://pbs.twimg.com/media/...)
+
+---
+
+> Likes: 1,234 · Retweets: 567 · Replies: 89</pre>
+      </div>
+    </section>
+
+    <!-- General -->
+    <section class="card">
+      <h2>General</h2>
+      <div class="setting-row">
+        <div>
+          <label for="show-notifications">Show Notifications</label>
+          <p class="hint">Display a notification after each save</p>
+        </div>
+        <input type="checkbox" id="show-notifications" class="toggle">
+      </div>
+    </section>
+
+    <!-- Tips -->
+    <section class="card">
+      <h2>Tips</h2>
+      <ul class="tips">
+        <li>Files save inside your <strong>Downloads</strong> folder (browser limitation).</li>
+        <li>To save to a custom location, create a symlink:<br>
+          <code>ln -s /your/desired/path ~/Downloads/SaveResearch</code>
+        </li>
+        <li>Works on all Chromium browsers: Chrome, Brave, Edge, Arc, Opera.</li>
+        <li>For Firefox, load the folder as a temporary add-on via <code>about:debugging</code>.</li>
+        <li>Install Ollama: <code>brew install ollama</code> then <code>ollama pull qwen3.5:4b</code></li>
+      </ul>
+    </section>
+
+    <div id="status" class="status" aria-live="polite"></div>
+  </div>
+
+  <template id="collection-template">
+    <div class="collection-item" data-id="">
+      <div class="collection-fields">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" class="col-name" placeholder="My Research">
+        </div>
+        <div class="field">
+          <label>Folder</label>
+          <div class="folder-input">
+            <span class="folder-prefix">~/Downloads/</span>
+            <input type="text" class="col-folder" placeholder="SaveResearch">
+          </div>
+        </div>
+      </div>
+      <div class="collection-actions">
+        <button class="btn-icon btn-active" title="Set as active">
+          <span class="active-dot"></span>
+        </button>
+        <button class="btn-icon btn-delete" title="Delete collection">
+          <span class="delete-icon">&times;</span>
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <script src="options.js"></script>
+</body>
+</html>
