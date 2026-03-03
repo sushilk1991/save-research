@@ -71,6 +71,46 @@ function subfolderFor(type, settings) {
   return name ? name + '/' : '';
 }
 
+// --- Progress Overlay Helpers ---
+
+function _nullProgress() {
+  return { update() {}, done() {}, error() {} };
+}
+
+async function progressInit(tabId, steps) {
+  if (!tabId) return _nullProgress();
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['progress.js'],
+    });
+  } catch (err) {
+    console.warn(`[Save Research] Could not inject progress overlay: ${err.message}`);
+    return _nullProgress();
+  }
+
+  const send = (payload) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { action: 'sr-progress', ...payload });
+    } catch {}
+  };
+
+  send({ type: 'init', steps });
+
+  return {
+    update(stepIndex, status, detail) {
+      send({ type: 'update', stepIndex, status, detail });
+    },
+    done() {
+      send({ type: 'done' });
+    },
+    error(message) {
+      send({ type: 'error', message });
+    },
+  };
+}
+
 // --- Context Menu Setup ---
 
 async function setupContextMenus() {
@@ -134,22 +174,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
+  const tabId = tab?.id;
+
   try {
     switch (type) {
       case 'image':
-        await saveImage(info.srcUrl, collection, settings);
+        await saveImage(info.srcUrl, collection, settings, tabId);
         break;
       case 'link':
-        await saveLink(info.linkUrl, collection, settings);
+        await saveLink(info.linkUrl, collection, settings, tabId);
         break;
       case 'video':
-        await saveMedia(info.srcUrl, collection, settings);
+        await saveMedia(info.srcUrl, collection, settings, tabId);
         break;
       case 'page':
-        await savePage(tab.url, tab.title, collection, settings);
+        await savePage(tab.url, tab.title, collection, settings, tabId);
         break;
       case 'selection':
-        await saveSelection(info.selectionText, tab.url, tab.title, collection, settings);
+        await saveSelection(info.selectionText, tab.url, tab.title, collection, settings, tabId);
         break;
     }
   } catch (err) {
@@ -160,116 +202,220 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // --- Save Handlers ---
 
-async function saveImage(url, collection, settings) {
+async function saveImage(url, collection, settings, tabId) {
   if (!url) throw new Error('No image URL found');
 
-  const filename = generateFilename(url, 'image');
-  const path = `${collection.folder}/${subfolderFor('images', settings)}${filename}`;
+  const steps = ['Saving file'];
+  const progress = await progressInit(tabId, steps);
 
-  await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
-  notify('Image Saved', `Saved to ${collection.name}/${settings.folders.images || ''}`);
+  try {
+    progress.update(0, 'active');
+    const filename = generateFilename(url, 'image');
+    const path = `${collection.folder}/${subfolderFor('images', settings)}${filename}`;
+    await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
+    progress.update(0, 'done');
+    progress.done();
+    notify('Image Saved', `Saved to ${collection.name}/${settings.folders.images || ''}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
-async function saveLink(url, collection, settings) {
+async function saveLink(url, collection, settings, tabId) {
   if (!url) throw new Error('No link URL found');
 
   if (settings.youtube?.enabled && isYouTubeUrl(url)) {
-    return saveYouTube(url, null, collection, settings);
+    return saveYouTube(url, null, collection, settings, tabId);
   }
 
   if (settings.twitter?.enabled && isTwitterUrl(url)) {
-    return saveTwitter(url, null, collection, settings);
+    return saveTwitter(url, null, collection, settings, tabId);
   }
 
   const ext = getExtension(url);
 
-  if (IMAGE_EXTS.has(ext)) return saveImage(url, collection, settings);
-  if (VIDEO_EXTS.has(ext) || AUDIO_EXTS.has(ext)) return saveMedia(url, collection, settings);
-  if (DOC_EXTS.has(ext)) return saveDocument(url, collection, settings);
+  if (IMAGE_EXTS.has(ext)) return saveImage(url, collection, settings, tabId);
+  if (VIDEO_EXTS.has(ext) || AUDIO_EXTS.has(ext)) return saveMedia(url, collection, settings, tabId);
+  if (DOC_EXTS.has(ext)) return saveDocument(url, collection, settings, tabId);
 
-  return saveLinkAsMarkdown(url, collection, settings);
+  return saveLinkAsMarkdown(url, collection, settings, tabId);
 }
 
-async function saveLinkAsMarkdown(url, collection, settings) {
-  let markdown = await urlToMarkdown(url, settings.markdownMethod);
-  markdown = await enrichWithAI(markdown, settings);
+async function saveLinkAsMarkdown(url, collection, settings, tabId) {
+  const aiEnabled = !!settings.ai?.enabled;
+  const steps = ['Converting to Markdown'];
+  if (aiEnabled) steps.push('AI enrichment');
+  steps.push('Saving file');
+  const progress = await progressInit(tabId, steps);
 
-  const title = extractTitleFromMarkdown(markdown) || titleFromUrl(url);
-  const filename = sanitizeFilename(title) + '.md';
-  const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+  try {
+    let idx = 0;
+    progress.update(idx, 'active');
+    let markdown = await urlToMarkdown(url, settings.markdownMethod);
+    progress.update(idx, 'done');
 
-  await downloadTextFile(markdown, path);
-  notify('Link Saved', `Saved "${title}" to ${collection.name}`);
+    idx++;
+    if (aiEnabled) {
+      progress.update(idx, 'active');
+      markdown = await enrichWithAI(markdown, settings);
+      progress.update(idx, 'done');
+      idx++;
+    }
+
+    progress.update(idx, 'active');
+    const title = extractTitleFromMarkdown(markdown) || titleFromUrl(url);
+    const filename = sanitizeFilename(title) + '.md';
+    const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+    await downloadTextFile(markdown, path);
+    progress.update(idx, 'done');
+
+    progress.done();
+    notify('Link Saved', `Saved "${title}" to ${collection.name}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
-async function saveMedia(url, collection, settings) {
+async function saveMedia(url, collection, settings, tabId) {
   if (!url) throw new Error('No media URL found');
   if (url.startsWith('blob:')) {
     throw new Error('Cannot download blob URLs directly. Try the page\'s own download button.');
   }
 
-  const filename = generateFilename(url, 'media');
-  const path = `${collection.folder}/${subfolderFor('media', settings)}${filename}`;
+  const steps = ['Saving file'];
+  const progress = await progressInit(tabId, steps);
 
-  await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
-  notify('Media Saved', `Saved to ${collection.name}/${settings.folders.media || ''}`);
+  try {
+    progress.update(0, 'active');
+    const filename = generateFilename(url, 'media');
+    const path = `${collection.folder}/${subfolderFor('media', settings)}${filename}`;
+    await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
+    progress.update(0, 'done');
+    progress.done();
+    notify('Media Saved', `Saved to ${collection.name}/${settings.folders.media || ''}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
-async function saveDocument(url, collection, settings) {
-  const filename = generateFilename(url, 'document');
-  const path = `${collection.folder}/${subfolderFor('documents', settings)}${filename}`;
+async function saveDocument(url, collection, settings, tabId) {
+  const steps = ['Saving file'];
+  const progress = await progressInit(tabId, steps);
 
-  await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
-  notify('Document Saved', `Saved to ${collection.name}/${settings.folders.documents || ''}`);
+  try {
+    progress.update(0, 'active');
+    const filename = generateFilename(url, 'document');
+    const path = `${collection.folder}/${subfolderFor('documents', settings)}${filename}`;
+    await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
+    progress.update(0, 'done');
+    progress.done();
+    notify('Document Saved', `Saved to ${collection.name}/${settings.folders.documents || ''}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
-async function savePage(url, title, collection, settings) {
+async function savePage(url, title, collection, settings, tabId) {
   if (!url) throw new Error('No page URL');
 
   if (settings.youtube?.enabled && isYouTubeUrl(url)) {
-    return saveYouTube(url, 'tab', collection, settings);
+    return saveYouTube(url, 'tab', collection, settings, tabId);
   }
 
   if (settings.twitter?.enabled && isTwitterUrl(url)) {
-    return saveTwitter(url, 'tab', collection, settings);
+    return saveTwitter(url, 'tab', collection, settings, tabId);
   }
 
-  let markdown = await urlToMarkdown(url, settings.markdownMethod);
-  markdown = await enrichWithAI(markdown, settings);
+  const aiEnabled = !!settings.ai?.enabled;
+  const steps = ['Converting to Markdown'];
+  if (aiEnabled) steps.push('AI enrichment');
+  steps.push('Saving file');
+  const progress = await progressInit(tabId, steps);
 
-  const pageTitle = title || extractTitleFromMarkdown(markdown) || titleFromUrl(url);
-  const filename = sanitizeFilename(pageTitle) + '.md';
-  const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+  try {
+    let idx = 0;
+    progress.update(idx, 'active');
+    let markdown = await urlToMarkdown(url, settings.markdownMethod);
+    progress.update(idx, 'done');
 
-  await downloadTextFile(markdown, path);
-  notify('Page Saved', `Saved "${pageTitle}" to ${collection.name}`);
+    idx++;
+    if (aiEnabled) {
+      progress.update(idx, 'active');
+      markdown = await enrichWithAI(markdown, settings);
+      progress.update(idx, 'done');
+      idx++;
+    }
+
+    progress.update(idx, 'active');
+    const pageTitle = title || extractTitleFromMarkdown(markdown) || titleFromUrl(url);
+    const filename = sanitizeFilename(pageTitle) + '.md';
+    const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+    await downloadTextFile(markdown, path);
+    progress.update(idx, 'done');
+
+    progress.done();
+    notify('Page Saved', `Saved "${pageTitle}" to ${collection.name}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
-async function saveSelection(text, pageUrl, pageTitle, collection, settings) {
+async function saveSelection(text, pageUrl, pageTitle, collection, settings, tabId) {
   if (!text) throw new Error('No text selected');
 
-  const now = new Date().toISOString();
-  let markdown = [
-    '---',
-    `source: ${pageUrl}`,
-    `title: "${(pageTitle || '').replace(/"/g, '\\"')}"`,
-    `saved: ${now}`,
-    `type: selection`,
-    '---',
-    '',
-    `> ${text.split('\n').join('\n> ')}`,
-    '',
-    `— [Source](${pageUrl})`,
-    '',
-  ].join('\n');
+  const aiEnabled = !!settings.ai?.enabled;
+  const steps = [];
+  if (aiEnabled) steps.push('AI enrichment');
+  steps.push('Saving note');
+  const progress = await progressInit(tabId, steps);
 
-  markdown = await enrichWithAI(markdown, settings);
+  try {
+    let idx = 0;
+    const now = new Date().toISOString();
+    let markdown = [
+      '---',
+      `source: ${pageUrl}`,
+      `title: "${(pageTitle || '').replace(/"/g, '\\"')}"`,
+      `saved: ${now}`,
+      `type: selection`,
+      '---',
+      '',
+      `> ${text.split('\n').join('\n> ')}`,
+      '',
+      `— [Source](${pageUrl})`,
+      '',
+    ].join('\n');
 
-  const filename = sanitizeFilename(`${pageTitle || 'selection'}-${timestamp()}`) + '.md';
-  const path = `${collection.folder}/${subfolderFor('notes', settings)}${filename}`;
+    if (aiEnabled) {
+      progress.update(idx, 'active');
+      markdown = await enrichWithAI(markdown, settings);
+      progress.update(idx, 'done');
+      idx++;
+    }
 
-  await downloadTextFile(markdown, path);
-  notify('Selection Saved', `Saved to ${collection.name}`);
+    progress.update(idx, 'active');
+    const filename = sanitizeFilename(`${pageTitle || 'selection'}-${timestamp()}`) + '.md';
+    const path = `${collection.folder}/${subfolderFor('notes', settings)}${filename}`;
+    await downloadTextFile(markdown, path);
+    progress.update(idx, 'done');
+
+    progress.done();
+    notify('Selection Saved', `Saved to ${collection.name}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
+  }
 }
 
 // --- YouTube Detection & Utilities ---
@@ -327,6 +473,14 @@ function extractTweetId(url) {
   } catch { return ''; }
 }
 
+function extractTwitterAuthor(url) {
+  try {
+    const u = new URL(url);
+    const match = u.pathname.match(/^\/([^/]+)\/status\//);
+    return match ? match[1] : '';
+  } catch { return ''; }
+}
+
 function normalizeTwitterUrl(url) {
   try {
     const u = new URL(url);
@@ -338,12 +492,15 @@ function normalizeTwitterUrl(url) {
 
 // --- YouTube Extraction ---
 
-async function extractYouTubeFromTab(url) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) throw new Error('No active tab');
+async function extractYouTubeFromTab(url, tabId) {
+  if (!tabId) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) throw new Error('No active tab');
+    tabId = tab.id;
+  }
 
   const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: { tabId },
     world: 'MAIN',
     func: () => {
       const pr = window.ytInitialPlayerResponse;
@@ -425,20 +582,17 @@ async function extractYouTubeFromFetch(url) {
 
 // --- YouTube Transcript ---
 
-async function fetchTranscript(baseUrl, fromTab) {
+async function fetchTranscript(baseUrl, tabId) {
   if (!baseUrl) return null;
 
   const transcriptUrl = baseUrl + '&fmt=json3';
 
   try {
     let json3;
-    if (fromTab) {
+    if (tabId) {
       // Inject fetch into YouTube tab (same-origin, has cookies)
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab) return null;
-
       const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
+        target: { tabId },
         world: 'MAIN',
         func: async (url) => {
           const r = await fetch(url);
@@ -705,66 +859,144 @@ async function downloadViaYtDlp(url, title, collection, settings) {
 
 // --- YouTube Save Orchestrator ---
 
-async function saveYouTube(url, source, collection, settings) {
+async function saveYouTube(url, source, collection, settings, tabId) {
   const canonicalUrl = normalizeYouTubeUrl(url);
   const fromTab = source === 'tab';
 
-  // 1. Extract video data
-  let videoData;
+  const aiEnabled = !!settings.ai?.enabled;
+  const downloadVideo = !!settings.youtube?.downloadVideo;
+  const steps = ['Extracting video metadata', 'Fetching transcript', 'Building note'];
+  if (aiEnabled) steps.push('AI enrichment');
+  steps.push('Saving file');
+  if (downloadVideo) steps.push('Downloading video');
+  const progress = await progressInit(tabId, steps);
+
   try {
-    videoData = fromTab
-      ? await extractYouTubeFromTab(canonicalUrl)
-      : await extractYouTubeFromFetch(canonicalUrl);
-  } catch (err) {
-    console.warn(`[Save Research] YouTube extraction failed (${fromTab ? 'tab' : 'fetch'}): ${err.message}`);
-    // If tab extraction failed, try fetch fallback
-    if (fromTab) {
-      try {
-        videoData = await extractYouTubeFromFetch(canonicalUrl);
-      } catch (err2) {
-        console.warn(`[Save Research] YouTube fetch fallback also failed: ${err2.message}`);
-        // Final fallback: save as regular page
-        return saveLinkAsMarkdown(url, collection, settings);
+    let idx = 0;
+
+    // 1. Extract video data
+    progress.update(idx, 'active');
+    let videoData;
+    try {
+      videoData = fromTab
+        ? await extractYouTubeFromTab(canonicalUrl, tabId)
+        : await extractYouTubeFromFetch(canonicalUrl);
+    } catch (err) {
+      console.warn(`[Save Research] YouTube extraction failed (${fromTab ? 'tab' : 'fetch'}): ${err.message}`);
+      if (fromTab) {
+        try {
+          videoData = await extractYouTubeFromFetch(canonicalUrl);
+        } catch (err2) {
+          console.warn(`[Save Research] YouTube fetch fallback also failed: ${err2.message}`);
+          progress.error('Could not extract video data — saving as page');
+          return saveLinkAsMarkdown(url, collection, settings, tabId);
+        }
+      } else {
+        progress.error('Could not extract video data — saving as page');
+        return saveLinkAsMarkdown(url, collection, settings, tabId);
       }
-    } else {
-      return saveLinkAsMarkdown(url, collection, settings);
     }
+    progress.update(idx, 'done');
+    idx++;
+
+    // 2. Fetch transcript
+    progress.update(idx, 'active');
+    let transcript = '';
+    if (videoData.captionTrackUrl) {
+      const json3 = await fetchTranscript(videoData.captionTrackUrl, fromTab ? tabId : null);
+      if (json3) transcript = formatTranscript(json3);
+    }
+    progress.update(idx, transcript ? 'done' : 'skip');
+    idx++;
+
+    // 3. Build markdown
+    progress.update(idx, 'active');
+    let markdown = buildYouTubeMarkdown(canonicalUrl, videoData, transcript);
+    progress.update(idx, 'done');
+    idx++;
+
+    // 4. AI enrichment
+    if (aiEnabled) {
+      progress.update(idx, 'active');
+      markdown = await enrichYouTubeWithAI(markdown, videoData, transcript, settings);
+      progress.update(idx, 'done');
+      idx++;
+    }
+
+    // 5. Save markdown file
+    progress.update(idx, 'active');
+    const title = videoData.title || titleFromUrl(canonicalUrl);
+    const filename = sanitizeFilename(title) + '.md';
+    const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+    await downloadTextFile(markdown, path);
+    progress.update(idx, 'done');
+    idx++;
+
+    // 6. yt-dlp download (non-blocking, fire-and-forget)
+    if (downloadVideo) {
+      progress.update(idx, 'active');
+      downloadViaYtDlp(canonicalUrl, title, collection, settings).then(() => {
+        progress.update(idx, 'done');
+        progress.done();
+      }).catch(() => {
+        progress.update(idx, 'skip');
+        progress.done();
+      });
+    } else {
+      progress.done();
+    }
+
+    notify('YouTube Saved', `Saved "${title}" to ${collection.name}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
   }
-
-  // 2. Fetch transcript
-  let transcript = '';
-  if (videoData.captionTrackUrl) {
-    const json3 = await fetchTranscript(videoData.captionTrackUrl, fromTab);
-    if (json3) transcript = formatTranscript(json3);
-  }
-
-  // 3. Build markdown
-  let markdown = buildYouTubeMarkdown(canonicalUrl, videoData, transcript);
-
-  // 4. AI enrichment (YouTube-specific)
-  markdown = await enrichYouTubeWithAI(markdown, videoData, transcript, settings);
-
-  // 5. Save markdown file
-  const title = videoData.title || titleFromUrl(canonicalUrl);
-  const filename = sanitizeFilename(title) + '.md';
-  const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
-
-  await downloadTextFile(markdown, path);
-
-  // 6. yt-dlp download (non-blocking, fire-and-forget)
-  downloadViaYtDlp(canonicalUrl, title, collection, settings);
-
-  notify('YouTube Saved', `Saved "${title}" to ${collection.name}`);
 }
 
 // --- Twitter/X DOM Extraction ---
 
-function _extractTweetsFromDOM() {
+function _extractTweetsFromDOM(threadAuthor) {
   const tweetEls = document.querySelectorAll('[data-testid="tweet"]');
   if (!tweetEls.length) return [];
 
+  // Normalize the expected author handle for comparison
+  const expectedHandle = threadAuthor
+    ? (threadAuthor.startsWith('@') ? threadAuthor : `@${threadAuthor}`).toLowerCase()
+    : null;
+
   const tweets = [];
+  let firstAuthorHandle = null;
+
   for (const el of tweetEls) {
+    // Author info from User-Name testid — extract early so we can filter
+    const userNameEl = el.querySelector('[data-testid="User-Name"]');
+    let authorName = '';
+    let authorHandle = '';
+    if (userNameEl) {
+      const spans = userNameEl.querySelectorAll('span');
+      for (const span of spans) {
+        const t = span.textContent.trim();
+        if (t.startsWith('@') && !authorHandle) {
+          authorHandle = t;
+        } else if (t && !authorName && !t.startsWith('@') && t !== '·' && !t.includes('·')) {
+          authorName = t;
+        }
+      }
+    }
+
+    // Determine the thread author: use the URL-based handle if provided,
+    // otherwise use the first tweet's author as the thread owner
+    if (!firstAuthorHandle && authorHandle) {
+      firstAuthorHandle = authorHandle.toLowerCase();
+    }
+    const threadOwner = expectedHandle || firstAuthorHandle;
+
+    // Skip tweets from other users (replies/comments, not part of the thread)
+    if (threadOwner && authorHandle && authorHandle.toLowerCase() !== threadOwner) {
+      continue;
+    }
+
     // Text content — preserve line breaks and emoji
     const textEl = el.querySelector('[data-testid="tweetText"]');
     let text = '';
@@ -784,22 +1016,6 @@ function _extractTweetsFromDOM() {
         }
       }
       text = parts.join('');
-    }
-
-    // Author info from User-Name testid
-    const userNameEl = el.querySelector('[data-testid="User-Name"]');
-    let authorName = '';
-    let authorHandle = '';
-    if (userNameEl) {
-      const spans = userNameEl.querySelectorAll('span');
-      for (const span of spans) {
-        const t = span.textContent.trim();
-        if (t.startsWith('@') && !authorHandle) {
-          authorHandle = t;
-        } else if (t && !authorName && !t.startsWith('@') && t !== '·' && !t.includes('·')) {
-          authorName = t;
-        }
-      }
     }
 
     // Timestamp
@@ -861,14 +1077,18 @@ function _extractTweetsFromDOM() {
 
 // --- Twitter Tab Extraction + Background Tab Fallback ---
 
-async function extractTwitterFromTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) throw new Error('No active tab');
+async function extractTwitterFromTab(tabId, authorHandle) {
+  if (!tabId) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) throw new Error('No active tab');
+    tabId = tab.id;
+  }
 
   const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: { tabId },
     world: 'MAIN',
     func: _extractTweetsFromDOM,
+    args: [authorHandle || null],
   });
 
   const tweets = results?.[0]?.result;
@@ -877,6 +1097,7 @@ async function extractTwitterFromTab() {
 }
 
 async function extractTwitterFromBackgroundTab(url) {
+  const authorHandle = extractTwitterAuthor(url);
   const tab = await chrome.tabs.create({ url, active: false });
 
   try {
@@ -904,6 +1125,7 @@ async function extractTwitterFromBackgroundTab(url) {
       target: { tabId: tab.id },
       world: 'MAIN',
       func: _extractTweetsFromDOM,
+      args: [authorHandle || null],
     });
 
     const tweets = results?.[0]?.result;
@@ -1131,50 +1353,92 @@ async function generateTweetPdf(url, tweets, collection, settings) {
 
 // --- Twitter Save Orchestrator ---
 
-async function saveTwitter(url, source, collection, settings) {
+async function saveTwitter(url, source, collection, settings, tabId) {
   const canonicalUrl = normalizeTwitterUrl(url);
   const fromTab = source === 'tab';
 
-  // 1. Extract tweets from DOM
-  let tweets;
+  const aiEnabled = !!settings.ai?.enabled;
+  const savePdf = !!settings.twitter?.savePdf;
+  const steps = ['Extracting tweet data', 'Building note'];
+  if (aiEnabled) steps.push('AI enrichment');
+  steps.push('Saving file');
+  if (savePdf) steps.push('Generating PDF');
+  const progress = await progressInit(tabId, steps);
+
   try {
-    tweets = fromTab
-      ? await extractTwitterFromTab()
-      : await extractTwitterFromBackgroundTab(canonicalUrl);
-  } catch (err) {
-    console.warn(`[Save Research] Twitter extraction failed (${fromTab ? 'tab' : 'background'}): ${err.message}`);
-    // If tab extraction failed, try background tab fallback
-    if (fromTab) {
-      try {
-        tweets = await extractTwitterFromBackgroundTab(canonicalUrl);
-      } catch (err2) {
-        console.warn(`[Save Research] Twitter background tab fallback also failed: ${err2.message}`);
-        return saveLinkAsMarkdown(url, collection, settings);
+    let idx = 0;
+
+    // 1. Extract tweets from DOM
+    progress.update(idx, 'active');
+    let tweets;
+    const authorHandle = extractTwitterAuthor(canonicalUrl);
+    try {
+      tweets = fromTab
+        ? await extractTwitterFromTab(tabId, authorHandle)
+        : await extractTwitterFromBackgroundTab(canonicalUrl);
+    } catch (err) {
+      console.warn(`[Save Research] Twitter extraction failed (${fromTab ? 'tab' : 'background'}): ${err.message}`);
+      if (fromTab) {
+        try {
+          tweets = await extractTwitterFromBackgroundTab(canonicalUrl);
+        } catch (err2) {
+          console.warn(`[Save Research] Twitter background tab fallback also failed: ${err2.message}`);
+          progress.error('Could not extract tweet data — saving as page');
+          return saveLinkAsMarkdown(url, collection, settings, tabId);
+        }
+      } else {
+        progress.error('Could not extract tweet data — saving as page');
+        return saveLinkAsMarkdown(url, collection, settings, tabId);
       }
-    } else {
-      return saveLinkAsMarkdown(url, collection, settings);
     }
+    progress.update(idx, 'done');
+    idx++;
+
+    // 2. Build markdown
+    progress.update(idx, 'active');
+    let markdown = buildTwitterMarkdown(canonicalUrl, tweets);
+    progress.update(idx, 'done');
+    idx++;
+
+    // 3. AI enrichment
+    if (aiEnabled) {
+      progress.update(idx, 'active');
+      markdown = await enrichTwitterWithAI(markdown, tweets, settings);
+      progress.update(idx, 'done');
+      idx++;
+    }
+
+    // 4. Save markdown file
+    progress.update(idx, 'active');
+    const main = tweets[0];
+    const titleSnippet = (main.text || '').substring(0, 60).replace(/\n/g, ' ');
+    const title = `${main.authorName || main.authorHandle || 'Tweet'} - ${titleSnippet}`;
+    const filename = sanitizeFilename(title) + '.md';
+    const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
+    await downloadTextFile(markdown, path);
+    progress.update(idx, 'done');
+    idx++;
+
+    // 5. PDF generation (non-blocking, fire-and-forget)
+    if (savePdf) {
+      progress.update(idx, 'active');
+      generateTweetPdf(canonicalUrl, tweets, collection, settings).then(() => {
+        progress.update(idx, 'done');
+        progress.done();
+      }).catch(() => {
+        progress.update(idx, 'skip');
+        progress.done();
+      });
+    } else {
+      progress.done();
+    }
+
+    notify('Tweet Saved', `Saved "${main.authorName || main.authorHandle || 'tweet'}" to ${collection.name}`);
+  } catch (err) {
+    progress.error(err.message);
+    notify('Save Failed', err.message);
+    throw err;
   }
-
-  // 2. Build markdown
-  let markdown = buildTwitterMarkdown(canonicalUrl, tweets);
-
-  // 3. AI enrichment (reuses generic injectAIMetadata)
-  markdown = await enrichTwitterWithAI(markdown, tweets, settings);
-
-  // 4. Save markdown file
-  const main = tweets[0];
-  const titleSnippet = (main.text || '').substring(0, 60).replace(/\n/g, ' ');
-  const title = `${main.authorName || main.authorHandle || 'Tweet'} - ${titleSnippet}`;
-  const filename = sanitizeFilename(title) + '.md';
-  const path = `${collection.folder}/${subfolderFor('pages', settings)}${filename}`;
-
-  await downloadTextFile(markdown, path);
-
-  // 5. PDF generation (non-blocking, fire-and-forget)
-  generateTweetPdf(canonicalUrl, tweets, collection, settings);
-
-  notify('Tweet Saved', `Saved "${main.authorName || main.authorHandle || 'tweet'}" to ${collection.name}`);
 }
 
 // --- AI Enrichment (Ollama) ---
@@ -1666,7 +1930,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const settings = await getSettings();
       const collection = settings.collections.find(c => c.id === msg.collectionId)
                          || settings.collections[0];
-      await savePage(msg.url, msg.title, collection, settings);
+      await savePage(msg.url, msg.title, collection, settings, msg.tabId);
       sendResponse({ ok: true });
     })().catch(err => sendResponse({ ok: false, error: err.message }));
     return true;

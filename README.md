@@ -76,12 +76,7 @@ YouTube detection is enabled by default. When you save a YouTube URL (via right-
 - Full transcript (if available)
 - AI-generated tags, summary, key takeaways
 
-To also **download the video file**, enable "Download Video File" in settings and run the companion server:
-
-```bash
-pip install yt-dlp
-python3 yt-dlp-server.py
-```
+To also **download the video file**, enable "Download Video File" in settings and set up the [companion server](#companion-server).
 
 ### Twitter / X
 
@@ -93,12 +88,7 @@ Twitter detection is enabled by default. When you save a tweet URL, the extensio
 - Media references (images, video thumbnails)
 - Engagement metrics (likes, retweets, replies, views)
 
-To also **generate a PDF** with embedded images, enable "Save as PDF" in settings and run the companion server with weasyprint:
-
-```bash
-pip install weasyprint
-python3 yt-dlp-server.py
-```
+To also **generate a PDF** with embedded images, enable "Save as PDF" in settings and set up the [companion server](#companion-server).
 
 ## Companion Server
 
@@ -108,10 +98,140 @@ The companion server (`yt-dlp-server.py`) runs on `localhost:11435` and handles:
 - `/download` — downloads YouTube videos via yt-dlp
 - `/tweet-pdf` — generates tweet PDFs via weasyprint
 
+Required for: YouTube video downloads and tweet PDF generation. Not needed for basic saving.
+
+### Setup
+
+1. Create a virtual environment and install dependencies:
+
+   ```bash
+   cd /path/to/save-research
+   python3 -m venv .venv
+   .venv/bin/pip install yt-dlp weasyprint
+   ```
+
+2. Verify everything installed:
+
+   ```bash
+   .venv/bin/yt-dlp --version
+   .venv/bin/python3 -c "import weasyprint; print(weasyprint.__version__)"
+   ```
+
+### Running manually
+
 ```bash
-python3 yt-dlp-server.py
+.venv/bin/python3 yt-dlp-server.py
 # or specify a port:
-python3 yt-dlp-server.py --port 11435
+.venv/bin/python3 yt-dlp-server.py --port 11435
+```
+
+### Auto-start on login (macOS)
+
+Create a LaunchAgent so the companion server starts automatically and restarts if it crashes.
+
+1. Create `~/Library/LaunchAgents/com.save-research.companion-server.plist`:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>Label</key>
+       <string>com.save-research.companion-server</string>
+
+       <key>ProgramArguments</key>
+       <array>
+           <string>/path/to/save-research/.venv/bin/python3</string>
+           <string>/path/to/save-research/yt-dlp-server.py</string>
+       </array>
+
+       <key>EnvironmentVariables</key>
+       <dict>
+           <key>PATH</key>
+           <string>/path/to/save-research/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+       </dict>
+
+       <key>WorkingDirectory</key>
+       <string>/path/to/save-research</string>
+
+       <key>RunAtLoad</key>
+       <true/>
+
+       <key>KeepAlive</key>
+       <dict>
+           <key>SuccessfulExit</key>
+           <false/>
+       </dict>
+
+       <key>StandardOutPath</key>
+       <string>/tmp/save-research-companion.log</string>
+       <key>StandardErrorPath</key>
+       <string>/tmp/save-research-companion.log</string>
+
+       <key>ProcessType</key>
+       <string>Background</string>
+   </dict>
+   </plist>
+   ```
+
+   Replace `/path/to/save-research` with the actual path to your cloned repo.
+
+2. Load and start it:
+
+   ```bash
+   launchctl load ~/Library/LaunchAgents/com.save-research.companion-server.plist
+   ```
+
+3. Verify it's running:
+
+   ```bash
+   curl localhost:11435/health
+   # Should return: {"ok": true, "ytdlp": true, ..., "weasyprint": true, ...}
+   ```
+
+**Manage the service:**
+
+```bash
+# View logs
+tail -f /tmp/save-research-companion.log
+
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.save-research.companion-server.plist
+
+# Start
+launchctl load ~/Library/LaunchAgents/com.save-research.companion-server.plist
+
+# Check what's on port 11435
+lsof -i :11435
+```
+
+### Auto-start on login (Linux)
+
+Create a systemd user service at `~/.config/systemd/user/save-research-companion.service`:
+
+```ini
+[Unit]
+Description=Save Research Companion Server
+After=network.target
+
+[Service]
+ExecStart=/path/to/save-research/.venv/bin/python3 /path/to/save-research/yt-dlp-server.py
+WorkingDirectory=/path/to/save-research
+Environment=PATH=/path/to/save-research/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Then enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable save-research-companion
+systemctl --user start save-research-companion
+systemctl --user status save-research-companion
 ```
 
 ## Example Output
@@ -147,9 +267,11 @@ A saved YouTube video includes the full transcript with timestamps:
 save-research/
 ├── manifest.json        # Extension manifest (MV3)
 ├── background.js        # Service worker — all save logic
+├── progress.js          # Content script — in-tab progress overlay
 ├── popup.html/js/css    # Extension popup
 ├── options.html/js/css  # Settings page
 ├── yt-dlp-server.py     # Companion server (yt-dlp + weasyprint)
+├── .venv/               # Python venv for companion server (not checked in)
 ├── icons/               # Extension icons
 └── scripts/             # Utility scripts (icon generation)
 ```

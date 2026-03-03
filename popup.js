@@ -99,27 +99,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const col = settings.collections.find(c => c.id === settings.activeCollectionId)
                 || settings.collections[0];
 
-    const btn = document.getElementById('save-current');
-    btn.textContent = 'Saving...';
-    btn.disabled = true;
-
-    try {
-      // Use the background script's message handler
-      await chrome.runtime.sendMessage({
-        action: 'savePage',
-        url: tab.url,
-        title: tab.title,
-        collectionId: col.id,
-      });
-      btn.textContent = 'Saved!';
-      setTimeout(() => window.close(), 800);
-    } catch (err) {
-      btn.textContent = 'Failed';
-      setTimeout(() => {
-        btn.textContent = 'Save Current Page';
-        btn.disabled = false;
-      }, 2000);
-    }
+    // Fire-and-forget — the overlay on the tab handles feedback
+    chrome.runtime.sendMessage({
+      action: 'savePage',
+      url: tab.url,
+      title: tab.title,
+      collectionId: col.id,
+      tabId: tab.id,
+    });
+    window.close();
   });
 
   // Open settings
