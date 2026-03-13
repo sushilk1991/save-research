@@ -18,6 +18,7 @@
   let renderRAF = null;          // requestAnimationFrame ID for throttled rendering
 
   const MAX_HISTORY = 20; // Cap chat history to prevent unbounded growth
+  const STORAGE_KEY_PREFIX = 'sr-chat-'; // Prefix for chat storage keys
 
   // --- DOM Elements ---
   const pageTitle = document.getElementById('page-title');
@@ -44,6 +45,66 @@
   const searchResults = document.getElementById('search-results');
   const searchCount = document.getElementById('search-count');
   const searchEmpty = document.getElementById('search-empty');
+
+  // --- Chat Persistence ---
+  function getChatStorageKey() {
+    if (!currentUrl) return null;
+    // Use domain + pathname as key to group chats per page
+    try {
+      const url = new URL(currentUrl);
+      const key = (url.hostname + url.pathname).replace(/[^a-z0-9]/gi, '-').substring(0, 100);
+      return STORAGE_KEY_PREFIX + key;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveChatHistory() {
+    const key = getChatStorageKey();
+    if (!key || chatHistory.length === 0) return;
+
+    try {
+      await chrome.storage.local.set({
+        [key]: {
+          history: chatHistory.slice(-MAX_HISTORY),
+          url: currentUrl,
+          title: pageContent?.title || '',
+          timestamp: Date.now(),
+        }
+      });
+    } catch {
+      // Storage full or unavailable — silently fail
+    }
+  }
+
+  async function restoreChatHistory() {
+    const key = getChatStorageKey();
+    if (!key) return;
+
+    try {
+      const result = await chrome.storage.local.get(key);
+      const data = result[key];
+      if (data?.history?.length > 0) {
+        chatHistory = data.history;
+        welcomeMessage.classList.add('hidden');
+
+        // Render restored messages
+        for (const msg of chatHistory) {
+          appendMessage(msg.role, msg.content);
+        }
+        scrollToBottom();
+      }
+    } catch {
+      // Storage unavailable
+    }
+  }
+
+  // Debounced save — saves after each message exchange
+  let saveDebounce = null;
+  function debouncedSave() {
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(saveChatHistory, 500);
+  }
 
   // --- Theme ---
   const SUN_PATH = 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z';
@@ -126,6 +187,9 @@
 
     // Populate quick actions based on content type
     populateQuickActions();
+
+    // Restore previous chat history for this URL
+    await restoreChatHistory();
 
     // Update context pill with reading/watch time
     if (pageContent.type === 'youtube') {
@@ -307,6 +371,8 @@
       chatHistory = chatHistory.slice(-MAX_HISTORY);
     }
 
+    debouncedSave();
+
     try {
       abortController = new AbortController();
 
@@ -373,6 +439,8 @@
       if (chatHistory.length > MAX_HISTORY) {
         chatHistory = chatHistory.slice(-MAX_HISTORY);
       }
+
+      debouncedSave();
 
       // Final render with action buttons
       assistantBubble.innerHTML = renderMarkdown(fullResponse);
@@ -844,6 +912,12 @@
     welcomeMessage.classList.remove('hidden');
     chatMessages.appendChild(welcomeMessage);
     clearSelection();
+
+    // Clear persisted history for this URL
+    const key = getChatStorageKey();
+    if (key) {
+      chrome.storage.local.remove(key).catch(() => {});
+    }
   }
 
   clearChatBtn.addEventListener('click', clearChat);
