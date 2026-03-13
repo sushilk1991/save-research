@@ -7,6 +7,9 @@ const {
   extractDomain,
   contentFingerprint,
   stripHtml,
+  analyzeReadability,
+  countSyllables,
+  getContentStats,
 } = require('../lib/content-utils');
 
 // --- estimateReadingTime ---
@@ -253,5 +256,80 @@ describe('stripHtml', () => {
     const html = '<div><h1>Title</h1><p>Text with <strong>bold</strong> and <a href="#">link</a></p></div>';
     const result = stripHtml(html);
     expect(result).toBe('TitleText with bold and link');
+  });
+});
+
+// --- countSyllables ---
+
+describe('countSyllables', () => {
+  test('short words get 1 syllable', () => {
+    expect(countSyllables('a')).toBe(1);
+    expect(countSyllables('go')).toBe(1);
+  });
+
+  test('counts common words correctly', () => {
+    expect(countSyllables('hello')).toBe(2);
+    expect(countSyllables('beautiful')).toBe(3);
+    expect(countSyllables('cat')).toBe(1);
+  });
+
+  test('handles silent e', () => {
+    expect(countSyllables('make')).toBe(1);
+    expect(countSyllables('time')).toBe(1);
+  });
+});
+
+// --- analyzeReadability ---
+
+describe('analyzeReadability', () => {
+  test('returns N/A for empty input', () => {
+    const result = analyzeReadability('');
+    expect(result.readabilityLabel).toBe('N/A');
+    expect(result.words).toBe(0);
+  });
+
+  test('analyzes simple text', () => {
+    const text = 'The cat sat on the mat. The dog ran in the park.';
+    const result = analyzeReadability(text);
+    expect(result.words).toBeGreaterThan(0);
+    expect(result.sentences).toBe(2);
+    expect(result.gradeLevel).toBeLessThan(10);
+    expect(result.readabilityLabel).toBeTruthy();
+  });
+
+  test('complex text has higher grade level', () => {
+    const simple = 'The cat is big. It is nice.';
+    const complex = 'The pharmaceutical conglomerate systematically administered unprecedented transformational initiatives.';
+    const simpleResult = analyzeReadability(simple);
+    const complexResult = analyzeReadability(complex);
+    expect(complexResult.gradeLevel).toBeGreaterThan(simpleResult.gradeLevel);
+  });
+
+  test('returns valid readability labels', () => {
+    const validLabels = ['Very Easy', 'Easy', 'Moderate', 'Difficult', 'Very Difficult', 'N/A'];
+    const result = analyzeReadability('Some sample text here. Another sentence.');
+    expect(validLabels).toContain(result.readabilityLabel);
+  });
+});
+
+// --- getContentStats ---
+
+describe('getContentStats', () => {
+  test('returns zeros for empty input', () => {
+    const stats = getContentStats('');
+    expect(stats.words).toBe(0);
+    expect(stats.characters).toBe(0);
+  });
+
+  test('returns comprehensive stats', () => {
+    const text = 'First paragraph here. Two sentences here.\n\nSecond paragraph. Also has two sentences.';
+    const stats = getContentStats(text);
+    expect(stats.words).toBeGreaterThan(0);
+    expect(stats.characters).toBeGreaterThan(0);
+    expect(stats.sentences).toBeGreaterThan(0);
+    expect(stats.paragraphs).toBe(2);
+    expect(stats.readingTime).toContain('min');
+    expect(stats.gradeLevel).toBeGreaterThanOrEqual(0);
+    expect(stats.readabilityLabel).toBeTruthy();
   });
 });

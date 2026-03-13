@@ -40,6 +40,8 @@
   let activeTab = 'chat';
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
   const themeIcon = document.getElementById('theme-icon');
+  const statsView = document.getElementById('stats-view');
+  const statsGrid = document.getElementById('stats-grid');
   const searchView = document.getElementById('search-view');
   const searchInput = document.getElementById('search-input');
   const searchResults = document.getElementById('search-results');
@@ -665,11 +667,14 @@
     document.querySelector('.input-area').style.display = chatVisible ? '' : 'none';
     outlineView.classList.toggle('hidden', tab !== 'outline');
     searchView.classList.toggle('hidden', tab !== 'search');
+    statsView.classList.toggle('hidden', tab !== 'stats');
 
     if (tab === 'outline') {
       renderOutline();
     } else if (tab === 'search') {
       searchInput.focus();
+    } else if (tab === 'stats') {
+      renderStats();
     }
   }
 
@@ -713,6 +718,86 @@
       });
       outlineList.appendChild(li);
     }
+  }
+
+  // --- Stats ---
+  function renderStats() {
+    statsGrid.innerHTML = '';
+
+    if (!pageContent) {
+      statsGrid.innerHTML = '<div style="text-align:center;color:#9ca3af;padding:40px;">No content loaded.</div>';
+      return;
+    }
+
+    if (pageContent.type === 'youtube') {
+      addStat(statsGrid, formatDuration(pageContent.duration), 'Duration');
+      addStat(statsGrid, pageContent.viewCount ? Number(pageContent.viewCount).toLocaleString() : 'N/A', 'Views');
+      addStat(statsGrid, pageContent.channel || 'Unknown', 'Channel');
+      addStat(statsGrid, pageContent.transcript ? 'Yes' : 'No', 'Transcript');
+      if (pageContent.publishDate) {
+        addStat(statsGrid, new Date(pageContent.publishDate).toLocaleDateString(), 'Published');
+      }
+      if (pageContent.transcript) {
+        const txStats = typeof getContentStats === 'function' ? getContentStats(pageContent.transcript) : null;
+        if (txStats) {
+          addStat(statsGrid, txStats.words.toLocaleString(), 'Transcript Words');
+          addStat(statsGrid, txStats.readingTime, 'Read Transcript');
+        }
+      }
+    } else if (pageContent.type === 'twitter') {
+      const tweetCount = pageContent.tweets?.length || 0;
+      addStat(statsGrid, String(tweetCount), `Tweet${tweetCount !== 1 ? 's' : ''}`);
+      const allText = (pageContent.tweets || []).map(t => t.text).join(' ');
+      if (allText && typeof getContentStats === 'function') {
+        const stats = getContentStats(allText);
+        addStat(statsGrid, stats.words.toLocaleString(), 'Total Words');
+        addStat(statsGrid, stats.readingTime, 'Reading Time');
+      }
+    } else {
+      // General page
+      if (typeof getContentStats === 'function' && pageContent.content) {
+        const stats = getContentStats(pageContent.content);
+        addStat(statsGrid, stats.words.toLocaleString(), 'Words');
+        addStat(statsGrid, stats.readingTime, 'Reading Time');
+        addStat(statsGrid, String(stats.sentences), 'Sentences');
+        addStat(statsGrid, String(stats.paragraphs), 'Paragraphs');
+
+        // Readability with badge
+        const badgeClass = stats.gradeLevel <= 8 ? 'easy' : stats.gradeLevel <= 12 ? 'moderate' : 'difficult';
+        const card = addStat(statsGrid, `Grade ${stats.gradeLevel}`, 'Readability', true);
+        const badge = document.createElement('span');
+        badge.className = `stat-badge ${badgeClass}`;
+        badge.textContent = stats.readabilityLabel;
+        card.appendChild(badge);
+
+        addStat(statsGrid, stats.characters.toLocaleString(), 'Characters');
+      } else {
+        addStat(statsGrid, String(pageContent.wordCount || 0), 'Words');
+      }
+
+      if (pageContent.author) {
+        addStat(statsGrid, pageContent.author, 'Author');
+      }
+      addStat(statsGrid, pageContent.domain || extractDomain(pageContent.url), 'Source');
+    }
+  }
+
+  function addStat(container, value, label, fullWidth = false) {
+    const card = document.createElement('div');
+    card.className = 'stat-card' + (fullWidth ? ' full-width' : '');
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'stat-value';
+    valueEl.textContent = value;
+    card.appendChild(valueEl);
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'stat-label';
+    labelEl.textContent = label;
+    card.appendChild(labelEl);
+
+    container.appendChild(card);
+    return card;
   }
 
   // --- Quick Actions ---
