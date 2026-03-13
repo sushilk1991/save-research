@@ -117,7 +117,22 @@ async function progressInit(tabId, steps) {
 
 // --- Context Menu Setup ---
 
+let _menuSetupPromise = null;
+
 async function setupContextMenus() {
+  // Prevent concurrent menu setup — wait for any in-flight call to finish
+  if (_menuSetupPromise) {
+    await _menuSetupPromise;
+  }
+  _menuSetupPromise = _setupContextMenusImpl();
+  try {
+    await _menuSetupPromise;
+  } finally {
+    _menuSetupPromise = null;
+  }
+}
+
+async function _setupContextMenusImpl() {
   await chrome.contextMenus.removeAll();
 
   const settings = await getSettings();
@@ -1933,23 +1948,20 @@ async function closeSidePanel(tabId) {
 
 async function extractPageContent(tabId) {
   try {
-    // Inject Defuddle into the MAIN world (idempotent — checks if already loaded)
-    await chrome.scripting.executeScript({
+    // Check if Defuddle is already loaded in the page's MAIN world
+    const checkResults = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: () => {
-        if (typeof Defuddle !== 'undefined') return 'already loaded';
-        return 'needs injection';
-      },
-    }).then(async (results) => {
-      if (results?.[0]?.result === 'needs injection') {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          world: 'MAIN',
-          files: ['lib/defuddle.js'],
-        });
-      }
+      func: () => typeof Defuddle !== 'undefined',
     });
+
+    if (!checkResults?.[0]?.result) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        files: ['lib/defuddle.js'],
+      });
+    }
   } catch (err) {
     console.warn('[Save Research] Could not inject Defuddle:', err.message);
   }
@@ -2086,22 +2098,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === 'toggle-sidepanel') {
     if (_toggleInProgress) return false;
+    const tabId = sender.tab?.id;
+    if (!tabId) return false;
     _toggleInProgress = true;
-    (async () => {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab) return;
-        if (_sidePanelOpenTabId === tab.id) {
-          await closeSidePanel(tab.id);
-        } else {
-          // Store selection for side panel to pick up during init
-          _pendingSelection = msg.selection || null;
-          await openSidePanel(tab.id);
-        }
-      } finally {
-        _toggleInProgress = false;
-      }
-    })();
+    if (_sidePanelOpenTabId === tabId) {
+      closeSidePanel(tabId).finally(() => { _toggleInProgress = false; });
+    } else {
+      _pendingSelection = msg.selection || null;
+      // Call open directly — keep user gesture context intact for sidePanel.open()
+      openSidePanel(tabId).finally(() => { _toggleInProgress = false; });
+    }
     return false;
   }
 

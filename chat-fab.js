@@ -13,6 +13,7 @@
   let shadowRoot = null;
   let isPanelOpen = false;
   let selectedText = '';
+  const cleanupFns = [];
 
   // --- SVG Icons ---
   const CHAT_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
@@ -93,6 +94,7 @@
     const tooltip = shadowRoot.querySelector('.selection-tooltip');
 
     fab.addEventListener('click', () => {
+      if (!chrome.runtime?.id) { removeFab(); return; }
       chrome.runtime.sendMessage({
         action: 'toggle-sidepanel',
         selection: selectedText || '',
@@ -100,6 +102,7 @@
     });
 
     tooltip.addEventListener('click', () => {
+      if (!chrome.runtime?.id) { removeFab(); return; }
       chrome.runtime.sendMessage({
         action: 'toggle-sidepanel',
         selection: selectedText || '',
@@ -120,7 +123,7 @@
   }
 
   // --- Selection tracking ---
-  document.addEventListener('mouseup', () => {
+  const onMouseUp = () => {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : '';
     selectedText = text;
@@ -134,23 +137,30 @@
         tooltip.classList.remove('visible');
       }
     }
-  });
+  };
+  document.addEventListener('mouseup', onMouseUp);
+  cleanupFns.push(() => document.removeEventListener('mouseup', onMouseUp));
 
   // --- Messages from background ---
-  chrome.runtime.onMessage.addListener((msg) => {
+  const onMessage = (msg) => {
     if (msg.action === 'sr-chat-panel-state') {
       updateFabIcon(msg.open);
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
+  cleanupFns.push(() => chrome.runtime.onMessage.removeListener(onMessage));
 
   // --- Sync FAB icon when tab becomes visible (fixes desync on tab switch) ---
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      chrome.runtime.sendMessage({ action: 'get-panel-state' }).then((resp) => {
-        if (resp?.ok) updateFabIcon(resp.open);
-      }).catch(() => {});
-    }
-  });
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== 'visible') return;
+    // If extension was refreshed/updated, chrome.runtime.id becomes undefined
+    if (!chrome.runtime?.id) { removeFab(); return; }
+    chrome.runtime.sendMessage({ action: 'get-panel-state' }).then((resp) => {
+      if (resp?.ok) updateFabIcon(resp.open);
+    }).catch(err => console.debug('Save Research: Failed to get panel state', err));
+  };
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  cleanupFns.push(() => document.removeEventListener('visibilitychange', onVisibilityChange));
 
   function removeFab() {
     if (hostEl) {
@@ -158,10 +168,13 @@
       hostEl = null;
       shadowRoot = null;
     }
+    cleanupFns.forEach(fn => fn());
+    cleanupFns.length = 0;
+    window.__saveResearchChatFab = false;
   }
 
   // --- React to setting changes ---
-  chrome.storage.onChanged.addListener((changes, area) => {
+  const onStorageChange = (changes, area) => {
     if (area === 'sync' && changes.settings) {
       const showFab = changes.settings.newValue?.chat?.showFab ?? true;
       if (showFab && !hostEl) {
@@ -170,7 +183,9 @@
         removeFab();
       }
     }
-  });
+  };
+  chrome.storage.onChanged.addListener(onStorageChange);
+  cleanupFns.push(() => chrome.storage.onChanged.removeListener(onStorageChange));
 
   // --- Init: check setting before showing FAB ---
   (async () => {
