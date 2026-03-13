@@ -14,6 +14,21 @@
     if (['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(hostname)) {
       return 'twitter';
     }
+    if (['www.reddit.com', 'reddit.com', 'old.reddit.com', 'new.reddit.com'].includes(hostname)) {
+      return 'reddit';
+    }
+    if (['news.ycombinator.com'].includes(hostname)) {
+      return 'hackernews';
+    }
+    if (hostname.endsWith('wikipedia.org')) {
+      return 'wikipedia';
+    }
+    if (['arxiv.org', 'www.arxiv.org'].includes(hostname)) {
+      return 'arxiv';
+    }
+    if (['github.com', 'www.github.com'].includes(hostname)) {
+      return 'github';
+    }
     return 'page';
   }
 
@@ -78,6 +93,77 @@
     };
   }
 
+  // --- Reddit extraction ---
+  function extractReddit() {
+    const postTitle = document.querySelector('[slot="title"]')?.textContent
+      || document.querySelector('.Post h1, .Post h3')?.textContent
+      || document.title;
+
+    const postBody = document.querySelector('[slot="text-body"]')?.innerText
+      || document.querySelector('.Post .RichTextJSON-root, .Post [data-click-id="text"]')?.innerText
+      || '';
+
+    // Extract comments
+    const comments = [];
+    const commentEls = document.querySelectorAll('shreddit-comment, .Comment');
+    for (const el of commentEls) {
+      const author = el.getAttribute('author')
+        || el.querySelector('.Comment__author, [data-testid="comment_author_link"]')?.textContent?.trim();
+      const body = el.querySelector('[slot="comment"]')?.innerText
+        || el.querySelector('.Comment__body, .RichTextJSON-root')?.innerText;
+      const score = el.getAttribute('score')
+        || el.querySelector('.Comment__score, [data-testid="comment-score"]')?.textContent?.trim();
+
+      if (body) {
+        comments.push({
+          author: author || 'anonymous',
+          text: body.trim().substring(0, 2000),
+          score: score || '',
+        });
+      }
+    }
+
+    return {
+      type: 'reddit',
+      title: postTitle?.trim() || document.title,
+      content: postBody.trim(),
+      comments: comments.slice(0, 50), // Cap at 50 comments
+      url: window.location.href,
+      domain: 'reddit.com',
+      wordCount: (postBody + ' ' + comments.map(c => c.text).join(' ')).split(/\s+/).length,
+    };
+  }
+
+  // --- Hacker News extraction ---
+  function extractHackerNews() {
+    const titleEl = document.querySelector('.titleline > a, .storylink');
+    const title = titleEl?.textContent || document.title;
+    const storyUrl = titleEl?.href || window.location.href;
+
+    const comments = [];
+    const commentEls = document.querySelectorAll('.comtr');
+    for (const el of commentEls) {
+      const author = el.querySelector('.hnuser')?.textContent;
+      const body = el.querySelector('.commtext')?.innerText;
+      if (body) {
+        comments.push({
+          author: author || 'anonymous',
+          text: body.trim().substring(0, 2000),
+        });
+      }
+    }
+
+    return {
+      type: 'hackernews',
+      title: title.trim(),
+      storyUrl,
+      comments: comments.slice(0, 50),
+      url: window.location.href,
+      domain: 'news.ycombinator.com',
+      wordCount: comments.map(c => c.text).join(' ').split(/\s+/).length,
+    };
+  }
+
   // --- General page extraction via Defuddle ---
   function extractGeneral() {
     try {
@@ -123,6 +209,16 @@
     if (!result.tweets || result.tweets.length === 0) {
       result = extractGeneral();
     }
+  } else if (pageType === 'reddit') {
+    result = extractReddit();
+    if (!result.content && (!result.comments || result.comments.length === 0)) {
+      result = extractGeneral();
+    }
+  } else if (pageType === 'hackernews') {
+    result = extractHackerNews();
+    if (!result.comments || result.comments.length === 0) {
+      result = extractGeneral();
+    }
   } else {
     result = extractGeneral();
   }
@@ -133,5 +229,5 @@
   }
 
   // Return result to the caller (chrome.scripting.executeScript)
-  result;
+  return result;
 })();

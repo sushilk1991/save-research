@@ -302,6 +302,12 @@
     } else if (pageContent.type === 'twitter') {
       const count = pageContent.tweets?.length || 0;
       contextPill.textContent = `Twitter \u00B7 ${count} tweet${count !== 1 ? 's' : ''}`;
+    } else if (pageContent.type === 'reddit') {
+      const count = pageContent.comments?.length || 0;
+      contextPill.textContent = `Reddit \u00B7 ${count} comment${count !== 1 ? 's' : ''}`;
+    } else if (pageContent.type === 'hackernews') {
+      const count = pageContent.comments?.length || 0;
+      contextPill.textContent = `Hacker News \u00B7 ${count} comment${count !== 1 ? 's' : ''}`;
     } else {
       const readInfo = typeof estimateReadingTime === 'function'
         ? estimateReadingTime(pageContent.content || '')
@@ -363,6 +369,32 @@
         prompt += '---\n';
       }
       prompt += '\nAnswer the user\'s questions about these tweets. Be concise and specific. Use markdown formatting.';
+    } else if (pageContent.type === 'reddit') {
+      prompt = 'You are a helpful assistant analyzing a Reddit post and its comments.\n\n';
+      prompt += `Post Title: ${pageContent.title}\n`;
+      if (pageContent.content) {
+        prompt += `\nPost Body:\n${pageContent.content}\n`;
+      }
+      if (pageContent.comments && pageContent.comments.length > 0) {
+        prompt += '\n--- COMMENTS ---\n';
+        for (const comment of pageContent.comments.slice(0, 30)) {
+          prompt += `u/${comment.author}${comment.score ? ` (${comment.score} pts)` : ''}:\n${comment.text}\n\n`;
+        }
+        prompt += '---\n';
+      }
+      prompt += '\nAnswer the user\'s questions about this post and discussion. Be concise. Use markdown formatting.';
+    } else if (pageContent.type === 'hackernews') {
+      prompt = 'You are a helpful assistant analyzing a Hacker News discussion.\n\n';
+      prompt += `Title: ${pageContent.title}\n`;
+      if (pageContent.storyUrl) prompt += `Story URL: ${pageContent.storyUrl}\n`;
+      if (pageContent.comments && pageContent.comments.length > 0) {
+        prompt += '\n--- COMMENTS ---\n';
+        for (const comment of pageContent.comments.slice(0, 30)) {
+          prompt += `${comment.author}:\n${comment.text}\n\n`;
+        }
+        prompt += '---\n';
+      }
+      prompt += '\nAnswer the user\'s questions about this discussion. Be concise. Use markdown formatting.';
     } else {
       // General page
       prompt = 'You are a helpful assistant analyzing the content of a web page the user is currently viewing.\n\n';

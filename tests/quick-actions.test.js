@@ -59,8 +59,24 @@ describe('getQuickActions', () => {
     expect(labels).not.toContain('Quiz me');
   });
 
+  test('returns Reddit-specific actions', () => {
+    const actions = getQuickActions('reddit');
+    const labels = actions.map(a => a.label);
+    expect(labels).toContain('Best comments');
+    expect(labels).toContain('Consensus');
+    expect(labels).toContain('TL;DR');
+  });
+
+  test('returns Hacker News-specific actions', () => {
+    const actions = getQuickActions('hackernews');
+    const labels = actions.map(a => a.label);
+    expect(labels).toContain('Best insights');
+    expect(labels).toContain('Resources');
+    expect(labels).toContain('Debate');
+  });
+
   test('all actions have both label and prompt', () => {
-    for (const type of ['youtube', 'twitter', 'page']) {
+    for (const type of ['youtube', 'twitter', 'reddit', 'hackernews', 'page']) {
       const actions = getQuickActions(type, { hasTranscript: true, wordCount: 5000 });
       for (const action of actions) {
         expect(action.label).toBeTruthy();
