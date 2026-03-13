@@ -553,6 +553,51 @@
     }
   });
 
+  // --- Keyboard Shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+Shift+C — copy last assistant response
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
+      e.preventDefault();
+      const lastAssistant = chatHistory.findLast(m => m.role === 'assistant');
+      if (lastAssistant) {
+        navigator.clipboard.writeText(lastAssistant.content).catch(() => {});
+      }
+      return;
+    }
+
+    // Escape — stop streaming or clear input
+    if (e.key === 'Escape') {
+      if (isStreaming && abortController) {
+        abortController.abort();
+      } else if (chatInput.value.trim()) {
+        chatInput.value = '';
+        autoResize();
+        updateInputState();
+      }
+      return;
+    }
+
+    // Ctrl/Cmd+L — clear chat
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      e.preventDefault();
+      if (!isStreaming) {
+        chatHistory = [];
+        chatMessages.innerHTML = '';
+        welcomeMessage.classList.remove('hidden');
+        chatMessages.appendChild(welcomeMessage);
+        clearSelection();
+      }
+      return;
+    }
+
+    // / — focus input (when not already focused)
+    if (e.key === '/' && document.activeElement !== chatInput) {
+      e.preventDefault();
+      chatInput.focus();
+      return;
+    }
+  });
+
   // --- Start ---
   init();
 })();
