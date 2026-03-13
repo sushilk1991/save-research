@@ -510,6 +510,32 @@ body.dark .stat-badge.difficult { background: #7f1d1d; color: #fca5a5; }
   font-weight: 600;
 }
 
+.message.assistant .timestamp-link {
+  color: #0d9488;
+  text-decoration: none;
+  font-weight: 500;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 11px;
+  background: #f0fdfa;
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.message.assistant .timestamp-link:hover {
+  background: #ccfbf1;
+  text-decoration: underline;
+}
+
+body.dark .message.assistant .timestamp-link {
+  color: #6ee7b7;
+  background: #064e3b;
+}
+
+body.dark .message.assistant .timestamp-link:hover {
+  background: #065f46;
+}
+
 .message.assistant del {
   text-decoration: line-through;
   opacity: 0.7;

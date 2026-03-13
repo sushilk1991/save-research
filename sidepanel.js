@@ -298,6 +298,22 @@
   }
 
   // Markdown renderer is loaded from lib/markdown.js
+  // Enhance rendered markdown with timestamp links for YouTube
+  function renderContentMarkdown(text) {
+    let html = renderMarkdown(text);
+
+    // Linkify timestamps if we're on a YouTube page
+    if (pageContent?.type === 'youtube' && typeof linkifyTimestamps === 'function') {
+      const videoId = typeof extractYouTubeId === 'function'
+        ? extractYouTubeId(pageContent.url)
+        : null;
+      if (videoId) {
+        html = linkifyTimestamps(html, videoId);
+      }
+    }
+
+    return html;
+  }
 
   // --- Send message ---
   async function sendMessage(text) {
@@ -377,7 +393,7 @@
               if (!pendingRender) {
                 pendingRender = true;
                 renderRAF = requestAnimationFrame(() => {
-                  assistantBubble.innerHTML = renderMarkdown(fullResponse);
+                  assistantBubble.innerHTML = renderContentMarkdown(fullResponse);
                   scrollToBottom();
                   pendingRender = false;
                 });
@@ -406,7 +422,7 @@
       debouncedSave();
 
       // Final render with action buttons
-      assistantBubble.innerHTML = renderMarkdown(fullResponse);
+      assistantBubble.innerHTML = renderContentMarkdown(fullResponse);
       assistantBubble.appendChild(createMessageActions(fullResponse));
       scrollToBottom();
 
@@ -549,7 +565,7 @@
     } else if (role === 'user') {
       div.textContent = content;
     } else {
-      div.innerHTML = renderMarkdown(content);
+      div.innerHTML = renderContentMarkdown(content);
       if (content) {
         div.appendChild(createMessageActions(content));
       }
@@ -634,6 +650,28 @@
   });
 
   // Quick action chips are now created dynamically in populateQuickActions()
+
+  // Timestamp click handler — seeks YouTube video to that time
+  chatMessages.addEventListener('click', (e) => {
+    const link = e.target.closest('.timestamp-link');
+    if (!link) return;
+    e.preventDefault();
+    const seconds = parseInt(link.dataset.seconds, 10);
+    if (isNaN(seconds) || !activeTabId) return;
+
+    // Inject script to seek the YouTube player
+    chrome.scripting.executeScript({
+      target: { tabId: activeTabId },
+      func: (secs) => {
+        const video = document.querySelector('video');
+        if (video) {
+          video.currentTime = secs;
+          video.play();
+        }
+      },
+      args: [seconds],
+    }).catch(() => {});
+  });
 
   // Listen for selection from FAB
   chrome.runtime.onMessage.addListener((msg) => {
