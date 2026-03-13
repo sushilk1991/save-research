@@ -70,17 +70,12 @@ body {
 /* --- Quick Actions --- */
 .quick-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 16px;
+  padding: 8px 16px;
   background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  border-top: 1px solid #e5e7eb;
   flex-shrink: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.quick-actions::-webkit-scrollbar {
-  display: none;
 }
 
 .chip {
@@ -378,4 +373,46 @@ body {
 .send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* --- Message Actions --- */
+.message-actions {
+  display: none;
+  gap: 4px;
+  margin-top: 6px;
+  justify-content: flex-start;
+}
+
+.message.assistant:hover .message-actions {
+  display: flex;
+}
+
+.message-action-btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #6b7280;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.message-action-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.message-action-btn.copied {
+  color: #059669;
+  border-color: #059669;
+}
+
+.message-action-btn svg {
+  width: 12px;
+  height: 12px;
 }

@@ -325,8 +325,9 @@
         chatHistory = chatHistory.slice(-MAX_HISTORY);
       }
 
-      // Final render
+      // Final render with action buttons
       assistantBubble.innerHTML = renderMarkdown(fullResponse);
+      assistantBubble.appendChild(createMessageActions(fullResponse));
       scrollToBottom();
 
     } catch (err) {
@@ -343,7 +344,89 @@
     }
   }
 
+  // --- SVG Icons ---
+  const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+  const SAVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+
   // --- UI Helpers ---
+  function createMessageActions(rawContent) {
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'message-action-btn';
+    copyBtn.innerHTML = `${COPY_ICON} Copy`;
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(rawContent);
+        copyBtn.innerHTML = `${CHECK_ICON} Copied`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = `${COPY_ICON} Copy`;
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      } catch {
+        // Fallback for older browsers
+        const ta = document.createElement('textarea');
+        ta.value = rawContent;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        copyBtn.innerHTML = `${CHECK_ICON} Copied`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = `${COPY_ICON} Copy`;
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      }
+    });
+    actions.appendChild(copyBtn);
+
+    // Save button — downloads response as markdown file
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'message-action-btn';
+    saveBtn.innerHTML = `${SAVE_ICON} Save`;
+    saveBtn.addEventListener('click', () => {
+      const title = pageContent?.title || 'chat-response';
+      const safeName = title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase();
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      const filename = `${safeName}-${timestamp}.md`;
+
+      const frontmatter = [
+        '---',
+        `source: ${pageContent?.url || ''}`,
+        `title: "${(pageContent?.title || '').replace(/"/g, '\\"')}"`,
+        `saved: ${new Date().toISOString()}`,
+        `type: chat-response`,
+        '---',
+        '',
+      ].join('\n');
+
+      const blob = new Blob([frontmatter + rawContent], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      saveBtn.innerHTML = `${CHECK_ICON} Saved`;
+      saveBtn.classList.add('copied');
+      setTimeout(() => {
+        saveBtn.innerHTML = `${SAVE_ICON} Save`;
+        saveBtn.classList.remove('copied');
+      }, 2000);
+    });
+    actions.appendChild(saveBtn);
+
+    return actions;
+  }
+
   function appendMessage(role, content, isLoading = false) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
@@ -354,6 +437,9 @@
       div.textContent = content;
     } else {
       div.innerHTML = renderMarkdown(content);
+      if (content) {
+        div.appendChild(createMessageActions(content));
+      }
     }
 
     chatMessages.appendChild(div);
