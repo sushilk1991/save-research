@@ -34,6 +34,9 @@ const DEFAULT_SETTINGS = {
     enabled: true,
     savePdf: false,
   },
+  chat: {
+    showFab: true,
+  },
 };
 
 // --- File Type Maps ---
@@ -57,6 +60,7 @@ async function getSettings() {
   merged.ai = { ...DEFAULT_SETTINGS.ai, ...(settings?.ai || {}) };
   merged.youtube = { ...DEFAULT_SETTINGS.youtube, ...(settings?.youtube || {}) };
   merged.twitter = { ...DEFAULT_SETTINGS.twitter, ...(settings?.twitter || {}) };
+  merged.chat = { ...DEFAULT_SETTINGS.chat, ...(settings?.chat || {}) };
   return merged;
 }
 
@@ -113,7 +117,22 @@ async function progressInit(tabId, steps) {
 
 // --- Context Menu Setup ---
 
+let _menuSetupPromise = null;
+
 async function setupContextMenus() {
+  // Prevent concurrent menu setup — wait for any in-flight call to finish
+  if (_menuSetupPromise) {
+    await _menuSetupPromise;
+  }
+  _menuSetupPromise = _setupContextMenusImpl();
+  try {
+    await _menuSetupPromise;
+  } finally {
+    _menuSetupPromise = null;
+  }
+}
+
+async function _setupContextMenusImpl() {
   await chrome.contextMenus.removeAll();
 
   const settings = await getSettings();
@@ -1899,6 +1918,67 @@ async function notify(title, message) {
   });
 }
 
+// --- Chat Side Panel Helpers ---
+
+let _sidePanelOpenTabId = null;
+let _toggleInProgress = false;  // Mutex for toggle-sidepanel
+let _pendingSelection = null;   // Selection text pending pickup by side panel
+
+async function openSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.open({ tabId });
+    _sidePanelOpenTabId = tabId;
+    chrome.tabs.sendMessage(tabId, { action: 'sr-chat-panel-state', open: true }).catch(() => {});
+  } catch (err) {
+    console.warn('[Save Research] Could not open side panel:', err.message);
+  }
+}
+
+async function closeSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.setOptions({ tabId, enabled: false });
+    // Re-enable for future use
+    await chrome.sidePanel.setOptions({ tabId, enabled: true });
+    _sidePanelOpenTabId = null;
+    chrome.tabs.sendMessage(tabId, { action: 'sr-chat-panel-state', open: false }).catch(() => {});
+  } catch (err) {
+    console.warn('[Save Research] Could not close side panel:', err.message);
+  }
+}
+
+async function extractPageContent(tabId) {
+  try {
+    // Check if Defuddle is already loaded in the page's MAIN world
+    const checkResults = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => typeof Defuddle !== 'undefined',
+    });
+
+    if (!checkResults?.[0]?.result) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        files: ['lib/defuddle.js'],
+      });
+    }
+  } catch (err) {
+    console.warn('[Save Research] Could not inject Defuddle:', err.message);
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      files: ['chat-content.js'],
+    });
+    return results?.[0]?.result || null;
+  } catch (err) {
+    console.error('[Save Research] Content extraction failed:', err);
+    return null;
+  }
+}
+
 // --- Event Listeners ---
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1923,8 +2003,29 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 });
 
-// Handle messages from popup and options page
+// Reset side panel state when tracked tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (_sidePanelOpenTabId === tabId) {
+    _sidePanelOpenTabId = null;
+  }
+});
+
+// Reset side panel state when active tab changes
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (_sidePanelOpenTabId && _sidePanelOpenTabId !== tabId) {
+    chrome.tabs.sendMessage(_sidePanelOpenTabId, {
+      action: 'sr-chat-panel-state',
+      open: false,
+    }).catch(() => {});
+    _sidePanelOpenTabId = null;
+  }
+});
+
+// Handle messages from popup, options page, and chat
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Only accept messages from our own extension
+  if (sender.id !== chrome.runtime.id) return;
+
   if (msg.action === 'savePage') {
     (async () => {
       const settings = await getSettings();
@@ -1990,6 +2091,85 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       sendResponse({ ok: true, models, modelExists, testPassed, testError });
     })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  // --- Chat Side Panel Actions ---
+
+  if (msg.action === 'toggle-sidepanel') {
+    if (_toggleInProgress) return false;
+    const tabId = sender.tab?.id;
+    if (!tabId) return false;
+    _toggleInProgress = true;
+    if (_sidePanelOpenTabId === tabId) {
+      closeSidePanel(tabId).finally(() => { _toggleInProgress = false; });
+    } else {
+      _pendingSelection = msg.selection || null;
+      // Call open directly — keep user gesture context intact for sidePanel.open()
+      openSidePanel(tabId).finally(() => { _toggleInProgress = false; });
+    }
+    return false;
+  }
+
+  if (msg.action === 'extract-page-content') {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) {
+        sendResponse({ ok: false, error: 'No active tab' });
+        return;
+      }
+      const content = await extractPageContent(tab.id);
+      if (content && content.type === 'youtube' && content.captionTrackUrl) {
+        const json3 = await fetchTranscript(content.captionTrackUrl, tab.id);
+        content.transcript = json3 ? formatTranscript(json3) : null;
+      }
+      sendResponse({ ok: true, data: content });
+    })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.action === 'get-ollama-settings') {
+    (async () => {
+      const settings = await getSettings();
+      sendResponse({
+        ok: true,
+        ollamaUrl: settings.ai.ollamaUrl,
+        model: settings.ai.model,
+      });
+    })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.action === 'get-panel-state') {
+    const tabId = sender.tab?.id;
+    sendResponse({ ok: true, open: _sidePanelOpenTabId === tabId });
+    return false;
+  }
+
+  if (msg.action === 'get-selection') {
+    // Check pending selection from FAB toggle first
+    if (_pendingSelection) {
+      const sel = _pendingSelection;
+      _pendingSelection = null;
+      sendResponse({ ok: true, selection: sel });
+      return true;
+    }
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) {
+        sendResponse({ ok: true, selection: '' });
+        return;
+      }
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => window.getSelection()?.toString()?.trim() || '',
+        });
+        sendResponse({ ok: true, selection: results?.[0]?.result || '' });
+      } catch {
+        sendResponse({ ok: true, selection: '' });
+      }
+    })().catch(() => sendResponse({ ok: true, selection: '' }));
     return true;
   }
 });

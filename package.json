@@ -1,0 +1,13 @@
+{
+  "name": "save-research",
+  "private": true,
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watchAll"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.3.0",
+    "defuddle": "^0.12.0",
+    "jest": "^30.3.0"
+  }
+}

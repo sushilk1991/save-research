@@ -1,0 +1,1234 @@
+// ============================================================
+// Save Research — Side Panel Chat
+// ============================================================
+
+(() => {
+  // --- State ---
+  let pageContent = null;   // Extracted page data (cached per URL)
+  let chatHistory = [];     // Array of { role: 'user'|'assistant', content: string }
+  let currentUrl = '';       // Track URL for reset
+  let selectionText = '';    // Text selection from page
+  let isStreaming = false;   // Prevent concurrent requests
+  let ollamaUrl = '';
+  let ollamaModel = '';
+  let abortController = null;
+  let cachedSystemPrompt = null; // Cached system prompt string
+  let activeTabId = null;        // Track which tab we're monitoring
+  let extractionGen = 0;         // Generation counter for stale extraction cancellation
+  let renderRAF = null;          // requestAnimationFrame ID for throttled rendering
+
+  const MAX_HISTORY = 20; // Cap chat history to prevent unbounded growth
+  const STORAGE_KEY_PREFIX = 'sr-chat-'; // Prefix for chat storage keys
+
+  // --- DOM Elements ---
+  const pageTitle = document.getElementById('page-title');
+  const contextPill = document.getElementById('context-pill');
+  const quickActions = document.getElementById('quick-actions');
+  const chatMessages = document.getElementById('chat-messages');
+  const welcomeMessage = document.getElementById('welcome-message');
+  const selectionQuote = document.getElementById('selection-quote');
+  const selectionTextEl = document.getElementById('selection-text');
+  const selectionDismiss = document.getElementById('selection-dismiss');
+  const chatInput = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('send-btn');
+  const modelSelect = document.getElementById('model-select');
+  const exportChatBtn = document.getElementById('export-chat-btn');
+  const clearChatBtn = document.getElementById('clear-chat-btn');
+  const tabBar = document.getElementById('tab-bar');
+  const outlineView = document.getElementById('outline-view');
+  const outlineList = document.getElementById('outline-list');
+  const outlineEmpty = document.getElementById('outline-empty');
+  let activeTab = 'chat';
+  const snapshotBtn = document.getElementById('snapshot-btn');
+  const themeToggleBtn = document.getElementById('theme-toggle-btn');
+  const themeIcon = document.getElementById('theme-icon');
+  const statsView = document.getElementById('stats-view');
+  const statsGrid = document.getElementById('stats-grid');
+  const searchView = document.getElementById('search-view');
+  const searchInput = document.getElementById('search-input');
+  const searchResults = document.getElementById('search-results');
+  const searchCount = document.getElementById('search-count');
+  const searchEmpty = document.getElementById('search-empty');
+
+  // --- Model Selection ---
+  async function fetchModels() {
+    if (!ollamaUrl) return;
+
+    try {
+      const resp = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      if (data.models && data.models.length > 0) {
+        modelSelect.innerHTML = '';
+        for (const model of data.models) {
+          const option = document.createElement('option');
+          option.value = model.name;
+          option.textContent = model.name;
+          if (model.name === ollamaModel) option.selected = true;
+          modelSelect.appendChild(option);
+        }
+      }
+    } catch {
+      // Ollama not reachable — keep showing loading or default
+      modelSelect.innerHTML = `<option value="${ollamaModel}">${ollamaModel}</option>`;
+    }
+  }
+
+  modelSelect.addEventListener('change', () => {
+    ollamaModel = modelSelect.value;
+    // Persist selection
+    localStorage.setItem('sr-model', ollamaModel);
+  });
+
+  // Restore last used model
+  const savedModel = localStorage.getItem('sr-model');
+  if (savedModel) ollamaModel = savedModel;
+
+  // --- Chat Persistence ---
+  function getChatStorageKey() {
+    if (!currentUrl) return null;
+    // Use domain + pathname as key to group chats per page
+    try {
+      const url = new URL(currentUrl);
+      const key = (url.hostname + url.pathname).replace(/[^a-z0-9]/gi, '-').substring(0, 100);
+      return STORAGE_KEY_PREFIX + key;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveChatHistory() {
+    const key = getChatStorageKey();
+    if (!key || chatHistory.length === 0) return;
+
+    try {
+      await chrome.storage.local.set({
+        [key]: {
+          history: chatHistory.slice(-MAX_HISTORY),
+          url: currentUrl,
+          title: pageContent?.title || '',
+          timestamp: Date.now(),
+        }
+      });
+    } catch {
+      // Storage full or unavailable — silently fail
+    }
+  }
+
+  async function restoreChatHistory() {
+    const key = getChatStorageKey();
+    if (!key) return;
+
+    try {
+      const result = await chrome.storage.local.get(key);
+      const data = result[key];
+      if (data?.history?.length > 0) {
+        chatHistory = data.history;
+        welcomeMessage.classList.add('hidden');
+
+        // Render restored messages
+        for (const msg of chatHistory) {
+          appendMessage(msg.role, msg.content);
+        }
+        scrollToBottom();
+      }
+    } catch {
+      // Storage unavailable
+    }
+  }
+
+  // Debounced save — saves after each message exchange
+  let saveDebounce = null;
+  function debouncedSave() {
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(saveChatHistory, 500);
+  }
+
+  // --- Content Snapshots ---
+  const SNAPSHOT_KEY_PREFIX = 'sr-snapshot-';
+
+  function getSnapshotKey() {
+    if (!currentUrl) return null;
+    try {
+      const url = new URL(currentUrl);
+      const key = (url.hostname + url.pathname).replace(/[^a-z0-9]/gi, '-').substring(0, 100);
+      return SNAPSHOT_KEY_PREFIX + key;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveSnapshot() {
+    if (!pageContent?.content) return;
+    const key = getSnapshotKey();
+    if (!key) return;
+
+    await chrome.storage.local.set({
+      [key]: {
+        content: pageContent.content.substring(0, 50000), // Limit size
+        title: pageContent.title,
+        url: currentUrl,
+        timestamp: Date.now(),
+      }
+    });
+
+    // Visual feedback
+    snapshotBtn.style.color = '#059669';
+    setTimeout(() => { snapshotBtn.style.color = ''; }, 1500);
+  }
+
+  async function compareWithSnapshot() {
+    const key = getSnapshotKey();
+    if (!key || !pageContent?.content) return null;
+
+    try {
+      const result = await chrome.storage.local.get(key);
+      const snapshot = result[key];
+      if (!snapshot?.content) return null;
+
+      if (typeof diffLines !== 'function') return null;
+
+      const diff = diffLines(snapshot.content, pageContent.content);
+      const summary = typeof diffSummary === 'function' ? diffSummary(diff) : null;
+
+      return {
+        diff,
+        summary,
+        snapshotDate: new Date(snapshot.timestamp),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  snapshotBtn.addEventListener('click', saveSnapshot);
+
+  // --- Theme ---
+  const SUN_PATH = 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z';
+  const MOON_PATH = 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z';
+
+  function applyTheme(dark) {
+    document.body.classList.toggle('dark', dark);
+    if (themeIcon) {
+      themeIcon.querySelector('path').setAttribute('d', dark ? SUN_PATH : MOON_PATH);
+    }
+  }
+
+  function initTheme() {
+    const stored = localStorage.getItem('sr-theme');
+    if (stored === 'dark') {
+      applyTheme(true);
+    } else if (stored === 'light') {
+      applyTheme(false);
+    } else {
+      // Follow system preference
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      applyTheme(prefersDark);
+    }
+  }
+
+  themeToggleBtn.addEventListener('click', () => {
+    const isDark = document.body.classList.contains('dark');
+    applyTheme(!isDark);
+    localStorage.setItem('sr-theme', isDark ? 'light' : 'dark');
+  });
+
+  initTheme();
+
+  // --- Initialize ---
+  async function init() {
+    // Get Ollama settings
+    const settingsResp = await chrome.runtime.sendMessage({ action: 'get-ollama-settings' });
+    if (settingsResp?.ok) {
+      ollamaUrl = settingsResp.ollamaUrl;
+      ollamaModel = settingsResp.model;
+    }
+
+    // Fetch available models from Ollama
+    await fetchModels();
+
+    // Determine active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) activeTabId = tab.id;
+
+    // Extract page content
+    await extractContent();
+
+    // Check for any pending selection from FAB toggle
+    const selResp = await chrome.runtime.sendMessage({ action: 'get-selection' });
+    if (selResp?.ok && selResp.selection) {
+      setSelection(selResp.selection);
+    }
+  }
+
+  async function extractContent() {
+    const gen = ++extractionGen;
+
+    pageTitle.textContent = 'Extracting content...';
+    contextPill.textContent = 'Loading...';
+
+    const resp = await chrome.runtime.sendMessage({ action: 'extract-page-content' });
+
+    // Stale extraction — a newer one was started
+    if (gen !== extractionGen) return;
+
+    if (!resp?.ok || !resp.data) {
+      pageTitle.textContent = 'Could not extract content';
+      contextPill.textContent = 'Error';
+      return;
+    }
+
+    pageContent = resp.data;
+    cachedSystemPrompt = null; // Invalidate cached prompt
+    currentUrl = pageContent.url;
+
+    // Update header
+    pageTitle.textContent = pageContent.title || pageContent.url;
+
+    // Populate quick actions based on content type
+    populateQuickActions();
+
+    // Restore previous chat history for this URL
+    await restoreChatHistory();
+
+    // Update context pill with reading/watch time
+    if (pageContent.type === 'youtube') {
+      const watchInfo = typeof estimateWatchTime === 'function'
+        ? estimateWatchTime(pageContent.duration || 0)
+        : { label: Math.floor((pageContent.duration || 0) / 60) + 'm' };
+      const hasTx = pageContent.transcript ? 'transcript loaded' : 'no transcript';
+      contextPill.textContent = `YouTube \u00B7 ${watchInfo.label} \u00B7 ${hasTx}`;
+    } else if (pageContent.type === 'twitter') {
+      const count = pageContent.tweets?.length || 0;
+      contextPill.textContent = `Twitter \u00B7 ${count} tweet${count !== 1 ? 's' : ''}`;
+    } else if (pageContent.type === 'reddit') {
+      const count = pageContent.comments?.length || 0;
+      contextPill.textContent = `Reddit \u00B7 ${count} comment${count !== 1 ? 's' : ''}`;
+    } else if (pageContent.type === 'hackernews') {
+      const count = pageContent.comments?.length || 0;
+      contextPill.textContent = `Hacker News \u00B7 ${count} comment${count !== 1 ? 's' : ''}`;
+    } else {
+      const readInfo = typeof estimateReadingTime === 'function'
+        ? estimateReadingTime(pageContent.content || '')
+        : { label: '', words: pageContent.wordCount || 0 };
+      const parts = ['Page'];
+      if (readInfo.label) parts.push(readInfo.label);
+      if (readInfo.words > 0) parts.push(`${readInfo.words.toLocaleString()} words`);
+      else if (pageContent.domain) parts.push(pageContent.domain);
+      contextPill.textContent = parts.join(' \u00B7 ');
+    }
+  }
+
+  // --- Selection ---
+  function setSelection(text) {
+    if (!text) return;
+    selectionText = text;
+    selectionTextEl.textContent = text.length > 200 ? text.substring(0, 200) + '...' : text;
+    selectionQuote.classList.remove('hidden');
+  }
+
+  function clearSelection() {
+    selectionText = '';
+    selectionQuote.classList.add('hidden');
+    selectionTextEl.textContent = '';
+  }
+
+  selectionDismiss.addEventListener('click', clearSelection);
+
+  // --- Build system prompt (cached) ---
+  function buildSystemPrompt() {
+    if (cachedSystemPrompt !== null) return cachedSystemPrompt;
+    if (!pageContent) return 'You are a helpful assistant.';
+
+    let prompt;
+
+    if (pageContent.type === 'youtube') {
+      prompt = 'You are a helpful assistant analyzing a YouTube video the user is watching.\n\n';
+      prompt += `Video: ${pageContent.title}\n`;
+      if (pageContent.channel) prompt += `Channel: ${pageContent.channel}\n`;
+      if (pageContent.duration) {
+        const mins = Math.floor(pageContent.duration / 60);
+        const secs = pageContent.duration % 60;
+        prompt += `Duration: ${mins}m ${secs}s\n`;
+      }
+      if (pageContent.description) {
+        prompt += `\nDescription:\n${pageContent.description.substring(0, 2000)}\n`;
+      }
+      if (pageContent.transcript) {
+        prompt += `\n--- TRANSCRIPT ---\n${pageContent.transcript}\n---\n`;
+      }
+      prompt += '\nAnswer the user\'s questions about this video. Be concise and specific. When referencing the content, quote relevant parts. Use markdown formatting for lists and structure.';
+    } else if (pageContent.type === 'twitter') {
+      prompt = 'You are a helpful assistant analyzing tweets the user is viewing.\n\n';
+      if (pageContent.tweets && pageContent.tweets.length > 0) {
+        prompt += '--- TWEETS ---\n';
+        for (const tweet of pageContent.tweets) {
+          prompt += `${tweet.author} (${tweet.time}):\n${tweet.text}\n\n`;
+        }
+        prompt += '---\n';
+      }
+      prompt += '\nAnswer the user\'s questions about these tweets. Be concise and specific. Use markdown formatting.';
+    } else if (pageContent.type === 'reddit') {
+      prompt = 'You are a helpful assistant analyzing a Reddit post and its comments.\n\n';
+      prompt += `Post Title: ${pageContent.title}\n`;
+      if (pageContent.content) {
+        prompt += `\nPost Body:\n${pageContent.content}\n`;
+      }
+      if (pageContent.comments && pageContent.comments.length > 0) {
+        prompt += '\n--- COMMENTS ---\n';
+        for (const comment of pageContent.comments.slice(0, 30)) {
+          prompt += `u/${comment.author}${comment.score ? ` (${comment.score} pts)` : ''}:\n${comment.text}\n\n`;
+        }
+        prompt += '---\n';
+      }
+      prompt += '\nAnswer the user\'s questions about this post and discussion. Be concise. Use markdown formatting.';
+    } else if (pageContent.type === 'hackernews') {
+      prompt = 'You are a helpful assistant analyzing a Hacker News discussion.\n\n';
+      prompt += `Title: ${pageContent.title}\n`;
+      if (pageContent.storyUrl) prompt += `Story URL: ${pageContent.storyUrl}\n`;
+      if (pageContent.comments && pageContent.comments.length > 0) {
+        prompt += '\n--- COMMENTS ---\n';
+        for (const comment of pageContent.comments.slice(0, 30)) {
+          prompt += `${comment.author}:\n${comment.text}\n\n`;
+        }
+        prompt += '---\n';
+      }
+      prompt += '\nAnswer the user\'s questions about this discussion. Be concise. Use markdown formatting.';
+    } else {
+      // General page
+      prompt = 'You are a helpful assistant analyzing the content of a web page the user is currently viewing.\n\n';
+      prompt += `Page Title: ${pageContent.title}\n`;
+      prompt += `URL: ${pageContent.url}\n`;
+      if (pageContent.author) prompt += `Author: ${pageContent.author}\n`;
+      prompt += `\n--- PAGE CONTENT ---\n${pageContent.content}\n---\n`;
+      prompt += '\nAnswer the user\'s questions about this content. Be concise and specific. When referencing the content, quote relevant parts. Use markdown formatting for lists and structure.';
+    }
+
+    cachedSystemPrompt = prompt;
+    return prompt;
+  }
+
+  // --- Build messages array for Ollama ---
+  function buildMessages(userMessage) {
+    const systemPrompt = buildSystemPrompt();
+    const messages = [{ role: 'system', content: systemPrompt }];
+
+    // Include last 10 messages from history
+    const recentHistory = chatHistory.slice(-10);
+    messages.push(...recentHistory);
+
+    // Prepend selection context to user message if present
+    let finalMessage = userMessage;
+    if (selectionText) {
+      finalMessage = `[Regarding this excerpt: "${selectionText}"]\n\n${userMessage}`;
+    }
+
+    messages.push({ role: 'user', content: finalMessage });
+    return messages;
+  }
+
+  // Markdown renderer is loaded from lib/markdown.js
+  // Enhance rendered markdown with timestamp links for YouTube
+  function renderContentMarkdown(text) {
+    let html = renderMarkdown(text);
+
+    // Linkify timestamps if we're on a YouTube page
+    if (pageContent?.type === 'youtube' && typeof linkifyTimestamps === 'function') {
+      const videoId = typeof extractYouTubeId === 'function'
+        ? extractYouTubeId(pageContent.url)
+        : null;
+      if (videoId) {
+        html = linkifyTimestamps(html, videoId);
+      }
+    }
+
+    return html;
+  }
+
+  // --- Send message ---
+  async function sendMessage(text) {
+    if (!text.trim() || isStreaming || !pageContent) return;
+
+    const userMessage = text.trim();
+    isStreaming = true;
+    updateInputState();
+
+    // Hide welcome message
+    welcomeMessage.classList.add('hidden');
+
+    // Add user message bubble
+    appendMessage('user', userMessage);
+
+    // Clear input
+    chatInput.value = '';
+    autoResize();
+
+    // Add assistant message bubble with loading dots
+    const assistantBubble = appendMessage('assistant', '', true);
+
+    // Build messages array
+    const messages = buildMessages(userMessage);
+
+    // Clear selection after sending
+    clearSelection();
+
+    // Save user message to history
+    chatHistory.push({ role: 'user', content: userMessage });
+
+    // Cap history length
+    if (chatHistory.length > MAX_HISTORY) {
+      chatHistory = chatHistory.slice(-MAX_HISTORY);
+    }
+
+    debouncedSave();
+
+    try {
+      abortController = new AbortController();
+
+      const resp = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages,
+          stream: true,
+          options: { temperature: 0.3 },
+        }),
+        signal: abortController.signal,
+      });
+
+      if (!resp.ok) {
+        throw new Error(`Ollama returned HTTP ${resp.status}`);
+      }
+
+      // Stream response with requestAnimationFrame throttling
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
+      let pendingRender = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n').filter(l => l.trim());
+
+        for (const line of lines) {
+          try {
+            const json = JSON.parse(line);
+            if (json.message?.content) {
+              fullResponse += json.message.content;
+              // Throttle DOM updates with requestAnimationFrame
+              if (!pendingRender) {
+                pendingRender = true;
+                renderRAF = requestAnimationFrame(() => {
+                  assistantBubble.innerHTML = renderContentMarkdown(fullResponse);
+                  scrollToBottom();
+                  pendingRender = false;
+                });
+              }
+            }
+          } catch {
+            // Skip malformed JSON lines
+          }
+        }
+      }
+
+      // Cancel any pending RAF
+      if (renderRAF) {
+        cancelAnimationFrame(renderRAF);
+        renderRAF = null;
+      }
+
+      // Save assistant response to history
+      chatHistory.push({ role: 'assistant', content: fullResponse });
+
+      // Cap history length
+      if (chatHistory.length > MAX_HISTORY) {
+        chatHistory = chatHistory.slice(-MAX_HISTORY);
+      }
+
+      debouncedSave();
+
+      // Final render with action buttons
+      assistantBubble.innerHTML = renderContentMarkdown(fullResponse);
+      assistantBubble.appendChild(createMessageActions(fullResponse));
+      scrollToBottom();
+
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        assistantBubble.innerHTML = '<em>Stopped</em>';
+      } else {
+        assistantBubble.remove();
+        showError(err.message);
+      }
+    } finally {
+      isStreaming = false;
+      abortController = null;
+      updateInputState();
+    }
+  }
+
+  // --- SVG Icons ---
+  const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+  const SAVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  const SPEAK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
+  const STOP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>';
+
+  // --- UI Helpers ---
+  function createMessageActions(rawContent) {
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'message-action-btn';
+    copyBtn.innerHTML = `${COPY_ICON} Copy`;
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(rawContent);
+        copyBtn.innerHTML = `${CHECK_ICON} Copied`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = `${COPY_ICON} Copy`;
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      } catch {
+        // Fallback for older browsers
+        const ta = document.createElement('textarea');
+        ta.value = rawContent;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        copyBtn.innerHTML = `${CHECK_ICON} Copied`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = `${COPY_ICON} Copy`;
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      }
+    });
+    actions.appendChild(copyBtn);
+
+    // Save button — downloads response as a formatted markdown note
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'message-action-btn';
+    saveBtn.innerHTML = `${SAVE_ICON} Save`;
+    saveBtn.addEventListener('click', () => {
+      const title = pageContent?.title || 'chat-response';
+      let noteContent;
+      let filename;
+
+      if (typeof formatNote === 'function') {
+        noteContent = formatNote({
+          content: rawContent,
+          title,
+          url: pageContent?.url || '',
+          type: 'chat-response',
+          author: pageContent?.author || '',
+        });
+        filename = typeof generateFilename === 'function'
+          ? generateFilename(title, 'note')
+          : `${title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase()}.md`;
+      } else {
+        // Fallback without note-formatter
+        noteContent = `---\nsource: ${pageContent?.url || ''}\ntitle: "${title}"\ntype: chat-response\n---\n\n${rawContent}`;
+        filename = `${title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase()}.md`;
+      }
+
+      const blob = new Blob([noteContent], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      saveBtn.innerHTML = `${CHECK_ICON} Saved`;
+      saveBtn.classList.add('copied');
+      setTimeout(() => {
+        saveBtn.innerHTML = `${SAVE_ICON} Save`;
+        saveBtn.classList.remove('copied');
+      }, 2000);
+    });
+    actions.appendChild(saveBtn);
+
+    // Speak button (only if TTS is available)
+    if (typeof TTS !== 'undefined' && TTS.isAvailable()) {
+      const speakBtn = document.createElement('button');
+      speakBtn.className = 'message-action-btn';
+      speakBtn.innerHTML = `${SPEAK_ICON} Listen`;
+
+      const updateSpeakBtn = (state) => {
+        if (state === 'playing') {
+          speakBtn.innerHTML = `${STOP_ICON} Stop`;
+        } else {
+          speakBtn.innerHTML = `${SPEAK_ICON} Listen`;
+        }
+      };
+
+      speakBtn.addEventListener('click', () => {
+        if (TTS.getState() === 'playing') {
+          TTS.stop();
+        } else {
+          TTS.setOnStateChange(updateSpeakBtn);
+          TTS.speak(rawContent);
+        }
+      });
+      actions.appendChild(speakBtn);
+    }
+
+    return actions;
+  }
+
+  function appendMessage(role, content, isLoading = false) {
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+
+    if (isLoading) {
+      div.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+    } else if (role === 'user') {
+      div.textContent = content;
+    } else {
+      div.innerHTML = renderContentMarkdown(content);
+      if (content) {
+        div.appendChild(createMessageActions(content));
+      }
+    }
+
+    chatMessages.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function showError(message) {
+    const div = document.createElement('div');
+    div.className = 'message error';
+
+    let errorText = message;
+    if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+      errorText = `Can't reach Ollama at ${ollamaUrl}. Check that it's running.`;
+    } else if (message.includes('404') || message.includes('model')) {
+      errorText = `Model '${ollamaModel}' not available. Check your extension settings.`;
+    }
+
+    // Use DOM API instead of innerHTML to prevent XSS
+    div.appendChild(document.createTextNode(errorText));
+    div.appendChild(document.createElement('br'));
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => {
+      if (isStreaming) return; // Guard against concurrent retry
+      div.remove();
+      // Find and remove the last user message from history
+      const lastUserIdx = chatHistory.findLastIndex(m => m.role === 'user');
+      if (lastUserIdx !== -1) {
+        const lastUserMsg = chatHistory[lastUserIdx];
+        chatHistory.splice(lastUserIdx, 1);
+        sendMessage(lastUserMsg.content);
+      }
+    });
+    div.appendChild(retryBtn);
+
+    chatMessages.appendChild(div);
+    scrollToBottom();
+  }
+
+  function scrollToBottom() {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function updateInputState() {
+    const hasText = chatInput.value.trim().length > 0;
+    sendBtn.disabled = !hasText || isStreaming || !pageContent;
+
+    // Disable chips while streaming
+    for (const chip of quickActions.querySelectorAll('.chip')) {
+      chip.disabled = isStreaming || !pageContent;
+    }
+  }
+
+  function autoResize() {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
+  }
+
+  // --- Event Listeners ---
+
+  // Send on button click
+  sendBtn.addEventListener('click', () => sendMessage(chatInput.value));
+
+  // Send on Enter (Shift+Enter for newline)
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(chatInput.value);
+    }
+  });
+
+  // Auto-resize textarea
+  chatInput.addEventListener('input', () => {
+    autoResize();
+    updateInputState();
+  });
+
+  // Quick action chips are now created dynamically in populateQuickActions()
+
+  // Timestamp click handler — seeks YouTube video to that time
+  chatMessages.addEventListener('click', (e) => {
+    const link = e.target.closest('.timestamp-link');
+    if (!link) return;
+    e.preventDefault();
+    const seconds = parseInt(link.dataset.seconds, 10);
+    if (isNaN(seconds) || !activeTabId) return;
+
+    // Inject script to seek the YouTube player
+    chrome.scripting.executeScript({
+      target: { tabId: activeTabId },
+      func: (secs) => {
+        const video = document.querySelector('video');
+        if (video) {
+          video.currentTime = secs;
+          video.play();
+        }
+      },
+      args: [seconds],
+    }).catch(() => {});
+  });
+
+  // Listen for selection from FAB
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.action === 'sr-chat-selection' && msg.selection) {
+      setSelection(msg.selection);
+    }
+  });
+
+  // Monitor tab URL changes — reset chat only for our active tab
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (tabId !== activeTabId) return; // Only react to our tab
+    if (changeInfo.url && changeInfo.url !== currentUrl) {
+      // URL changed — reset everything
+      chatHistory = [];
+      pageContent = null;
+      cachedSystemPrompt = null;
+      selectionText = '';
+      chatMessages.innerHTML = '';
+      welcomeMessage.classList.remove('hidden');
+      chatMessages.appendChild(welcomeMessage);
+      clearSelection();
+      extractContent();
+    }
+  });
+
+  // --- Tab Switching ---
+  function switchTab(tab) {
+    activeTab = tab;
+    for (const btn of tabBar.querySelectorAll('.tab')) {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    }
+
+    const chatVisible = tab === 'chat';
+    chatMessages.style.display = chatVisible ? '' : 'none';
+    quickActions.style.display = chatVisible ? '' : 'none';
+    selectionQuote.style.display = chatVisible ? '' : 'none';
+    document.querySelector('.input-area').style.display = chatVisible ? '' : 'none';
+    outlineView.classList.toggle('hidden', tab !== 'outline');
+    searchView.classList.toggle('hidden', tab !== 'search');
+    statsView.classList.toggle('hidden', tab !== 'stats');
+
+    if (tab === 'outline') {
+      renderOutline();
+    } else if (tab === 'search') {
+      searchInput.focus();
+    } else if (tab === 'stats') {
+      renderStats();
+    }
+  }
+
+  tabBar.addEventListener('click', (e) => {
+    const tab = e.target.dataset?.tab;
+    if (tab) switchTab(tab);
+  });
+
+  // --- Outline ---
+  function renderOutline() {
+    outlineList.innerHTML = '';
+
+    if (!pageContent?.content) {
+      outlineEmpty.style.display = '';
+      return;
+    }
+
+    const headings = typeof extractHeadings === 'function'
+      ? extractHeadings(pageContent.content)
+      : [];
+
+    if (headings.length === 0) {
+      outlineEmpty.style.display = '';
+      return;
+    }
+
+    outlineEmpty.style.display = 'none';
+
+    for (const heading of headings) {
+      const li = document.createElement('li');
+      li.className = `outline-item level-${heading.level}`;
+      li.textContent = heading.text;
+      li.addEventListener('click', () => {
+        // Ask about this heading in chat
+        switchTab('chat');
+        const prompt = `Explain the section "${heading.text}" in detail`;
+        chatInput.value = prompt;
+        autoResize();
+        updateInputState();
+        chatInput.focus();
+      });
+      outlineList.appendChild(li);
+    }
+  }
+
+  // --- Stats ---
+  function renderStats() {
+    statsGrid.innerHTML = '';
+
+    if (!pageContent) {
+      statsGrid.innerHTML = '<div style="text-align:center;color:#9ca3af;padding:40px;">No content loaded.</div>';
+      return;
+    }
+
+    if (pageContent.type === 'youtube') {
+      addStat(statsGrid, formatDuration(pageContent.duration), 'Duration');
+      addStat(statsGrid, pageContent.viewCount ? Number(pageContent.viewCount).toLocaleString() : 'N/A', 'Views');
+      addStat(statsGrid, pageContent.channel || 'Unknown', 'Channel');
+      addStat(statsGrid, pageContent.transcript ? 'Yes' : 'No', 'Transcript');
+      if (pageContent.publishDate) {
+        addStat(statsGrid, new Date(pageContent.publishDate).toLocaleDateString(), 'Published');
+      }
+      if (pageContent.transcript) {
+        const txStats = typeof getContentStats === 'function' ? getContentStats(pageContent.transcript) : null;
+        if (txStats) {
+          addStat(statsGrid, txStats.words.toLocaleString(), 'Transcript Words');
+          addStat(statsGrid, txStats.readingTime, 'Read Transcript');
+        }
+      }
+    } else if (pageContent.type === 'twitter') {
+      const tweetCount = pageContent.tweets?.length || 0;
+      addStat(statsGrid, String(tweetCount), `Tweet${tweetCount !== 1 ? 's' : ''}`);
+      const allText = (pageContent.tweets || []).map(t => t.text).join(' ');
+      if (allText && typeof getContentStats === 'function') {
+        const stats = getContentStats(allText);
+        addStat(statsGrid, stats.words.toLocaleString(), 'Total Words');
+        addStat(statsGrid, stats.readingTime, 'Reading Time');
+      }
+    } else {
+      // General page
+      if (typeof getContentStats === 'function' && pageContent.content) {
+        const stats = getContentStats(pageContent.content);
+        addStat(statsGrid, stats.words.toLocaleString(), 'Words');
+        addStat(statsGrid, stats.readingTime, 'Reading Time');
+        addStat(statsGrid, String(stats.sentences), 'Sentences');
+        addStat(statsGrid, String(stats.paragraphs), 'Paragraphs');
+
+        // Readability with badge
+        const badgeClass = stats.gradeLevel <= 8 ? 'easy' : stats.gradeLevel <= 12 ? 'moderate' : 'difficult';
+        const card = addStat(statsGrid, `Grade ${stats.gradeLevel}`, 'Readability', true);
+        const badge = document.createElement('span');
+        badge.className = `stat-badge ${badgeClass}`;
+        badge.textContent = stats.readabilityLabel;
+        card.appendChild(badge);
+
+        addStat(statsGrid, stats.characters.toLocaleString(), 'Characters');
+      } else {
+        addStat(statsGrid, String(pageContent.wordCount || 0), 'Words');
+      }
+
+      if (pageContent.author) {
+        addStat(statsGrid, pageContent.author, 'Author');
+      }
+      addStat(statsGrid, pageContent.domain || extractDomain(pageContent.url), 'Source');
+    }
+  }
+
+  function addStat(container, value, label, fullWidth = false) {
+    const card = document.createElement('div');
+    card.className = 'stat-card' + (fullWidth ? ' full-width' : '');
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'stat-value';
+    valueEl.textContent = value;
+    card.appendChild(valueEl);
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'stat-label';
+    labelEl.textContent = label;
+    card.appendChild(labelEl);
+
+    container.appendChild(card);
+    return card;
+  }
+
+  // --- Quick Actions ---
+  async function populateQuickActions() {
+    quickActions.innerHTML = '';
+
+    if (!pageContent || typeof getQuickActions !== 'function') {
+      // Fallback: static chips
+      const fallback = [
+        { label: 'Summarize', prompt: 'Summarize this content in a few paragraphs' },
+        { label: 'Key takeaways', prompt: 'What are the key takeaways? List them as bullet points' },
+        { label: 'ELI5', prompt: 'Explain this in simple terms' },
+      ];
+      for (const action of fallback) {
+        quickActions.appendChild(createChip(action));
+      }
+      return;
+    }
+
+    const meta = {
+      hasTranscript: !!pageContent.transcript,
+      wordCount: pageContent.wordCount || 0,
+    };
+
+    const actions = getQuickActions(pageContent.type, meta);
+    for (const action of actions) {
+      quickActions.appendChild(createChip(action));
+    }
+
+    // Check if a snapshot exists and add "What changed?" chip
+    const snapshotKey = getSnapshotKey();
+    if (snapshotKey) {
+      try {
+        const result = await chrome.storage.local.get(snapshotKey);
+        if (result[snapshotKey]) {
+          const changedChip = createChip({
+            label: 'What changed?',
+            prompt: '__diff__', // Special marker
+          });
+          changedChip.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const comparison = await compareWithSnapshot();
+            if (!comparison) {
+              appendMessage('assistant', 'No previous snapshot found or diff not available.');
+              return;
+            }
+            if (comparison.summary.added === 0 && comparison.summary.removed === 0) {
+              appendMessage('assistant', 'No changes detected since the last snapshot.');
+              return;
+            }
+
+            welcomeMessage.classList.add('hidden');
+            const msg = `**Changes since ${comparison.snapshotDate.toLocaleDateString()}:**\n\n${comparison.summary.summary}\n\nWould you like me to summarize the new content?`;
+            appendMessage('assistant', msg);
+          }, { once: true });
+          quickActions.insertBefore(changedChip, quickActions.firstChild);
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  }
+
+  function createChip(action) {
+    const btn = document.createElement('button');
+    btn.className = 'chip';
+    btn.textContent = action.label;
+    btn.dataset.prompt = action.prompt;
+    btn.disabled = isStreaming || !pageContent;
+    btn.addEventListener('click', () => {
+      if (!isStreaming && pageContent) {
+        sendMessage(action.prompt);
+      }
+    });
+    return btn;
+  }
+
+  // --- Search ---
+  let searchDebounce = null;
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(performSearch, 200);
+  });
+
+  function performSearch() {
+    const query = searchInput.value.trim();
+    searchResults.innerHTML = '';
+
+    if (!query || !pageContent?.content) {
+      searchCount.textContent = '';
+      searchResults.appendChild(searchEmpty);
+      searchEmpty.textContent = query ? 'No content loaded.' : 'Type to search within this page\'s content.';
+      return;
+    }
+
+    if (typeof searchContent !== 'function') {
+      searchCount.textContent = '';
+      searchEmpty.textContent = 'Search module not loaded.';
+      searchResults.appendChild(searchEmpty);
+      return;
+    }
+
+    const results = searchContent(pageContent.content, query, { contextChars: 60, maxResults: 50 });
+    const total = typeof countMatches === 'function' ? countMatches(pageContent.content, query) : results.length;
+
+    if (results.length === 0) {
+      searchCount.textContent = '0 results';
+      searchEmpty.textContent = `No matches for "${query}"`;
+      searchResults.appendChild(searchEmpty);
+      return;
+    }
+
+    searchCount.textContent = total > 50 ? `50 of ${total}` : `${total} result${total !== 1 ? 's' : ''}`;
+
+    for (const result of results) {
+      const div = document.createElement('div');
+      div.className = 'search-result-item';
+
+      const lineSpan = document.createElement('span');
+      lineSpan.className = 'line-num';
+      lineSpan.textContent = `L${result.lineNumber}`;
+      div.appendChild(lineSpan);
+
+      const textSpan = document.createElement('span');
+      textSpan.innerHTML = typeof highlightMatches === 'function'
+        ? highlightMatches(result.excerpt, query)
+        : result.excerpt;
+      div.appendChild(textSpan);
+
+      // Click to ask AI about this excerpt
+      div.addEventListener('click', () => {
+        switchTab('chat');
+        const prompt = `Explain this part of the content: "${result.excerpt.replace(/\.\.\./g, '').trim()}"`;
+        chatInput.value = prompt;
+        autoResize();
+        updateInputState();
+        chatInput.focus();
+      });
+
+      searchResults.appendChild(div);
+    }
+  }
+
+  // --- Export chat ---
+  function exportChat() {
+    if (chatHistory.length === 0) return;
+
+    const title = pageContent?.title || 'Chat';
+    const safeName = title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase();
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const filename = `chat-${safeName}-${timestamp}.md`;
+
+    const lines = [
+      '---',
+      `source: ${pageContent?.url || ''}`,
+      `title: "${(pageContent?.title || '').replace(/"/g, '\\"')}"`,
+      `exported: ${new Date().toISOString()}`,
+      `type: chat-export`,
+      `messages: ${chatHistory.length}`,
+      '---',
+      '',
+      `# Chat: ${title}`,
+      '',
+    ];
+
+    for (const msg of chatHistory) {
+      if (msg.role === 'user') {
+        lines.push(`**You:** ${msg.content}`, '');
+      } else {
+        lines.push(msg.content, '');
+      }
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  exportChatBtn.addEventListener('click', exportChat);
+
+  // --- Clear chat ---
+  function clearChat() {
+    if (isStreaming) return;
+    chatHistory = [];
+    chatMessages.innerHTML = '';
+    welcomeMessage.classList.remove('hidden');
+    chatMessages.appendChild(welcomeMessage);
+    clearSelection();
+
+    // Clear persisted history for this URL
+    const key = getChatStorageKey();
+    if (key) {
+      chrome.storage.local.remove(key).catch(() => {});
+    }
+  }
+
+  clearChatBtn.addEventListener('click', clearChat);
+
+  // --- Keyboard Shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+Shift+C — copy last assistant response
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
+      e.preventDefault();
+      const lastAssistant = chatHistory.findLast(m => m.role === 'assistant');
+      if (lastAssistant) {
+        navigator.clipboard.writeText(lastAssistant.content).catch(() => {});
+      }
+      return;
+    }
+
+    // Escape — stop streaming or clear input
+    if (e.key === 'Escape') {
+      if (isStreaming && abortController) {
+        abortController.abort();
+      } else if (chatInput.value.trim()) {
+        chatInput.value = '';
+        autoResize();
+        updateInputState();
+      }
+      return;
+    }
+
+    // Ctrl/Cmd+L — clear chat
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      e.preventDefault();
+      clearChat();
+      return;
+    }
+
+    // Ctrl/Cmd+E — export chat
+    if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+      e.preventDefault();
+      exportChat();
+      return;
+    }
+
+    // Ctrl/Cmd+F — search content
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      switchTab('search');
+      return;
+    }
+
+    // / — focus input (when not already focused)
+    if (e.key === '/' && document.activeElement !== chatInput) {
+      e.preventDefault();
+      chatInput.focus();
+      return;
+    }
+  });
+
+  // --- Start ---
+  init();
+})();

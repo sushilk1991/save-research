@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="sidepanel.css">
+  <title>Save Research Chat</title>
+</head>
+<body>
+  <div class="panel">
+    <!-- Header -->
+    <div class="panel-header">
+      <div class="header-info">
+        <span class="header-title" id="page-title">Loading...</span>
+      </div>
+    </div>
+
+    <!-- Context indicator -->
+    <div class="context-bar" id="context-bar">
+      <span class="context-pill" id="context-pill"></span>
+      <div class="context-actions">
+        <button class="context-action-btn" id="snapshot-btn" aria-label="Save snapshot" title="Save content snapshot">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
+        <button class="context-action-btn" id="theme-toggle-btn" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="theme-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <button class="context-action-btn" id="export-chat-btn" aria-label="Export chat" title="Export conversation">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+        <button class="context-action-btn" id="clear-chat-btn" aria-label="Clear chat" title="Clear conversation">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar" id="tab-bar">
+      <button class="tab active" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="outline">Outline</button>
+      <button class="tab" data-tab="search">Search</button>
+      <button class="tab" data-tab="stats">Stats</button>
+    </div>
+
+    <!-- Chat messages -->
+    <div class="chat-messages" id="chat-messages">
+      <div class="welcome-message" id="welcome-message">
+        <p>Ask anything about this page.</p>
+      </div>
+    </div>
+
+    <!-- Outline view -->
+    <div class="outline-view hidden" id="outline-view">
+      <div class="outline-empty" id="outline-empty">No headings found on this page.</div>
+      <ul class="outline-list" id="outline-list"></ul>
+    </div>
+
+    <!-- Search view -->
+    <div class="search-view hidden" id="search-view">
+      <div class="search-input-wrap">
+        <input type="text" id="search-input" class="search-input" placeholder="Search page content..." autocomplete="off">
+        <span class="search-count" id="search-count"></span>
+      </div>
+      <div class="search-results" id="search-results">
+        <div class="search-empty" id="search-empty">Type to search within this page's content.</div>
+      </div>
+    </div>
+
+    <!-- Stats view -->
+    <div class="stats-view hidden" id="stats-view">
+      <div class="stats-grid" id="stats-grid"></div>
+    </div>
+
+    <!-- Selection quote -->
+    <div class="selection-quote hidden" id="selection-quote">
+      <span class="selection-text" id="selection-text"></span>
+      <button class="selection-dismiss" id="selection-dismiss" aria-label="Dismiss selection">&times;</button>
+    </div>
+
+    <!-- Quick action chips (dynamically populated based on content type) -->
+    <div class="quick-actions" id="quick-actions"></div>
+
+    <!-- Input area -->
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
+        <button id="send-btn" class="send-btn" aria-label="Send message" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+      <div class="input-meta">
+        <select id="model-select" class="model-select" title="Select model">
+          <option value="">Loading models...</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <script src="lib/content-utils.js"></script>
+  <script src="lib/markdown.js"></script>
+  <script src="lib/content-search.js"></script>
+  <script src="lib/quick-actions.js"></script>
+  <script src="lib/note-formatter.js"></script>
+  <script src="lib/timestamp.js"></script>
+  <script src="lib/diff.js"></script>
+  <script src="lib/tts.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
