@@ -68,13 +68,8 @@
       <button class="selection-dismiss" id="selection-dismiss" aria-label="Dismiss selection">&times;</button>
     </div>
 
-    <!-- Quick action chips -->
-    <div class="quick-actions" id="quick-actions">
-      <button class="chip" data-prompt="Summarize this content in a few paragraphs">Summarize</button>
-      <button class="chip" data-prompt="What are the key takeaways from this content? List them as bullet points">Key takeaways</button>
-      <button class="chip" data-prompt="Create concise bullet points covering all the main points">Bullet points</button>
-      <button class="chip" data-prompt="Explain this content in simple terms, as if I'm five years old">ELI5</button>
-    </div>
+    <!-- Quick action chips (dynamically populated based on content type) -->
+    <div class="quick-actions" id="quick-actions"></div>
 
     <!-- Input area -->
     <div class="input-area">
@@ -87,6 +82,7 @@
 
   <script src="lib/content-utils.js"></script>
   <script src="lib/content-search.js"></script>
+  <script src="lib/quick-actions.js"></script>
   <script src="lib/tts.js"></script>
   <script src="sidepanel.js"></script>
 </body>

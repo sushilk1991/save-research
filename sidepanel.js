@@ -124,6 +124,9 @@
     // Update header
     pageTitle.textContent = pageContent.title || pageContent.url;
 
+    // Populate quick actions based on content type
+    populateQuickActions();
+
     // Update context pill with reading/watch time
     if (pageContent.type === 'youtube') {
       const watchInfo = typeof estimateWatchTime === 'function'
@@ -593,14 +596,7 @@
     updateInputState();
   });
 
-  // Quick action chips
-  for (const chip of quickActions.querySelectorAll('.chip')) {
-    chip.addEventListener('click', () => {
-      if (!isStreaming && pageContent) {
-        sendMessage(chip.dataset.prompt);
-      }
-    });
-  }
+  // Quick action chips are now created dynamically in populateQuickActions()
 
   // Listen for selection from FAB
   chrome.runtime.onMessage.addListener((msg) => {
@@ -688,6 +684,48 @@
       });
       outlineList.appendChild(li);
     }
+  }
+
+  // --- Quick Actions ---
+  function populateQuickActions() {
+    quickActions.innerHTML = '';
+
+    if (!pageContent || typeof getQuickActions !== 'function') {
+      // Fallback: static chips
+      const fallback = [
+        { label: 'Summarize', prompt: 'Summarize this content in a few paragraphs' },
+        { label: 'Key takeaways', prompt: 'What are the key takeaways? List them as bullet points' },
+        { label: 'ELI5', prompt: 'Explain this in simple terms' },
+      ];
+      for (const action of fallback) {
+        quickActions.appendChild(createChip(action));
+      }
+      return;
+    }
+
+    const meta = {
+      hasTranscript: !!pageContent.transcript,
+      wordCount: pageContent.wordCount || 0,
+    };
+
+    const actions = getQuickActions(pageContent.type, meta);
+    for (const action of actions) {
+      quickActions.appendChild(createChip(action));
+    }
+  }
+
+  function createChip(action) {
+    const btn = document.createElement('button');
+    btn.className = 'chip';
+    btn.textContent = action.label;
+    btn.dataset.prompt = action.prompt;
+    btn.disabled = isStreaming || !pageContent;
+    btn.addEventListener('click', () => {
+      if (!isStreaming && pageContent) {
+        sendMessage(action.prompt);
+      }
+    });
+    return btn;
   }
 
   // --- Search ---
