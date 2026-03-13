@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Save Research",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Save images, links, videos, and pages to dedicated folders with one right-click",
   "permissions": [
     "contextMenus",
@@ -9,11 +9,15 @@
     "storage",
     "activeTab",
     "notifications",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "options_ui": {
     "page": "options.html",
@@ -31,5 +35,18 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["chat-fab.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/defuddle.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
