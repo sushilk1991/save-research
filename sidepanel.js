@@ -31,6 +31,7 @@
   const selectionDismiss = document.getElementById('selection-dismiss');
   const chatInput = document.getElementById('chat-input');
   const sendBtn = document.getElementById('send-btn');
+  const modelSelect = document.getElementById('model-select');
   const exportChatBtn = document.getElementById('export-chat-btn');
   const clearChatBtn = document.getElementById('clear-chat-btn');
   const tabBar = document.getElementById('tab-bar');
@@ -47,6 +48,41 @@
   const searchResults = document.getElementById('search-results');
   const searchCount = document.getElementById('search-count');
   const searchEmpty = document.getElementById('search-empty');
+
+  // --- Model Selection ---
+  async function fetchModels() {
+    if (!ollamaUrl) return;
+
+    try {
+      const resp = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      if (data.models && data.models.length > 0) {
+        modelSelect.innerHTML = '';
+        for (const model of data.models) {
+          const option = document.createElement('option');
+          option.value = model.name;
+          option.textContent = model.name;
+          if (model.name === ollamaModel) option.selected = true;
+          modelSelect.appendChild(option);
+        }
+      }
+    } catch {
+      // Ollama not reachable — keep showing loading or default
+      modelSelect.innerHTML = `<option value="${ollamaModel}">${ollamaModel}</option>`;
+    }
+  }
+
+  modelSelect.addEventListener('change', () => {
+    ollamaModel = modelSelect.value;
+    // Persist selection
+    localStorage.setItem('sr-model', ollamaModel);
+  });
+
+  // Restore last used model
+  const savedModel = localStorage.getItem('sr-model');
+  if (savedModel) ollamaModel = savedModel;
 
   // --- Chat Persistence ---
   function getChatStorageKey() {
@@ -148,6 +184,9 @@
       ollamaUrl = settingsResp.ollamaUrl;
       ollamaModel = settingsResp.model;
     }
+
+    // Fetch available models from Ollama
+    await fetchModels();
 
     // Determine active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
