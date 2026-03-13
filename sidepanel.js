@@ -39,6 +39,11 @@
   let activeTab = 'chat';
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
   const themeIcon = document.getElementById('theme-icon');
+  const searchView = document.getElementById('search-view');
+  const searchInput = document.getElementById('search-input');
+  const searchResults = document.getElementById('search-results');
+  const searchCount = document.getElementById('search-count');
+  const searchEmpty = document.getElementById('search-empty');
 
   // --- Theme ---
   const SUN_PATH = 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z';
@@ -633,10 +638,13 @@
     quickActions.style.display = chatVisible ? '' : 'none';
     selectionQuote.style.display = chatVisible ? '' : 'none';
     document.querySelector('.input-area').style.display = chatVisible ? '' : 'none';
-    outlineView.classList.toggle('hidden', chatVisible);
+    outlineView.classList.toggle('hidden', tab !== 'outline');
+    searchView.classList.toggle('hidden', tab !== 'search');
 
     if (tab === 'outline') {
       renderOutline();
+    } else if (tab === 'search') {
+      searchInput.focus();
     }
   }
 
@@ -679,6 +687,73 @@
         chatInput.focus();
       });
       outlineList.appendChild(li);
+    }
+  }
+
+  // --- Search ---
+  let searchDebounce = null;
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(performSearch, 200);
+  });
+
+  function performSearch() {
+    const query = searchInput.value.trim();
+    searchResults.innerHTML = '';
+
+    if (!query || !pageContent?.content) {
+      searchCount.textContent = '';
+      searchResults.appendChild(searchEmpty);
+      searchEmpty.textContent = query ? 'No content loaded.' : 'Type to search within this page\'s content.';
+      return;
+    }
+
+    if (typeof searchContent !== 'function') {
+      searchCount.textContent = '';
+      searchEmpty.textContent = 'Search module not loaded.';
+      searchResults.appendChild(searchEmpty);
+      return;
+    }
+
+    const results = searchContent(pageContent.content, query, { contextChars: 60, maxResults: 50 });
+    const total = typeof countMatches === 'function' ? countMatches(pageContent.content, query) : results.length;
+
+    if (results.length === 0) {
+      searchCount.textContent = '0 results';
+      searchEmpty.textContent = `No matches for "${query}"`;
+      searchResults.appendChild(searchEmpty);
+      return;
+    }
+
+    searchCount.textContent = total > 50 ? `50 of ${total}` : `${total} result${total !== 1 ? 's' : ''}`;
+
+    for (const result of results) {
+      const div = document.createElement('div');
+      div.className = 'search-result-item';
+
+      const lineSpan = document.createElement('span');
+      lineSpan.className = 'line-num';
+      lineSpan.textContent = `L${result.lineNumber}`;
+      div.appendChild(lineSpan);
+
+      const textSpan = document.createElement('span');
+      textSpan.innerHTML = typeof highlightMatches === 'function'
+        ? highlightMatches(result.excerpt, query)
+        : result.excerpt;
+      div.appendChild(textSpan);
+
+      // Click to ask AI about this excerpt
+      div.addEventListener('click', () => {
+        switchTab('chat');
+        const prompt = `Explain this part of the content: "${result.excerpt.replace(/\.\.\./g, '').trim()}"`;
+        chatInput.value = prompt;
+        autoResize();
+        updateInputState();
+        chatInput.focus();
+      });
+
+      searchResults.appendChild(div);
     }
   }
 
@@ -770,6 +845,13 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
       e.preventDefault();
       exportChat();
+      return;
+    }
+
+    // Ctrl/Cmd+F — search content
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      switchTab('search');
       return;
     }
 

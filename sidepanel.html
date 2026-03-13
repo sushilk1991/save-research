@@ -35,6 +35,7 @@
     <div class="tab-bar" id="tab-bar">
       <button class="tab active" data-tab="chat">Chat</button>
       <button class="tab" data-tab="outline">Outline</button>
+      <button class="tab" data-tab="search">Search</button>
     </div>
 
     <!-- Chat messages -->
@@ -48,6 +49,17 @@
     <div class="outline-view hidden" id="outline-view">
       <div class="outline-empty" id="outline-empty">No headings found on this page.</div>
       <ul class="outline-list" id="outline-list"></ul>
+    </div>
+
+    <!-- Search view -->
+    <div class="search-view hidden" id="search-view">
+      <div class="search-input-wrap">
+        <input type="text" id="search-input" class="search-input" placeholder="Search page content..." autocomplete="off">
+        <span class="search-count" id="search-count"></span>
+      </div>
+      <div class="search-results" id="search-results">
+        <div class="search-empty" id="search-empty">Type to search within this page's content.</div>
+      </div>
     </div>
 
     <!-- Selection quote -->
@@ -74,6 +86,7 @@
   </div>
 
   <script src="lib/content-utils.js"></script>
+  <script src="lib/content-search.js"></script>
   <script src="lib/tts.js"></script>
   <script src="sidepanel.js"></script>
 </body>
