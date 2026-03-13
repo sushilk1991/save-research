@@ -469,27 +469,33 @@
     });
     actions.appendChild(copyBtn);
 
-    // Save button — downloads response as markdown file
+    // Save button — downloads response as a formatted markdown note
     const saveBtn = document.createElement('button');
     saveBtn.className = 'message-action-btn';
     saveBtn.innerHTML = `${SAVE_ICON} Save`;
     saveBtn.addEventListener('click', () => {
       const title = pageContent?.title || 'chat-response';
-      const safeName = title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase();
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-      const filename = `${safeName}-${timestamp}.md`;
+      let noteContent;
+      let filename;
 
-      const frontmatter = [
-        '---',
-        `source: ${pageContent?.url || ''}`,
-        `title: "${(pageContent?.title || '').replace(/"/g, '\\"')}"`,
-        `saved: ${new Date().toISOString()}`,
-        `type: chat-response`,
-        '---',
-        '',
-      ].join('\n');
+      if (typeof formatNote === 'function') {
+        noteContent = formatNote({
+          content: rawContent,
+          title,
+          url: pageContent?.url || '',
+          type: 'chat-response',
+          author: pageContent?.author || '',
+        });
+        filename = typeof generateFilename === 'function'
+          ? generateFilename(title, 'note')
+          : `${title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase()}.md`;
+      } else {
+        // Fallback without note-formatter
+        noteContent = `---\nsource: ${pageContent?.url || ''}\ntitle: "${title}"\ntype: chat-response\n---\n\n${rawContent}`;
+        filename = `${title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase()}.md`;
+      }
 
-      const blob = new Blob([frontmatter + rawContent], { type: 'text/markdown' });
+      const blob = new Blob([noteContent], { type: 'text/markdown' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
