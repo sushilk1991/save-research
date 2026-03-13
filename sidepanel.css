@@ -57,6 +57,12 @@ body {
   flex-shrink: 0;
 }
 
+.context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .context-pill {
   display: inline-block;
   font-size: 11px;
@@ -65,6 +71,29 @@ body {
   background: #f0fdfa;
   color: #0d9488;
   font-weight: 500;
+}
+
+.context-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.context-action-btn {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.context-action-btn:hover {
+  color: #374151;
+  background: #f3f4f6;
 }
 
 /* --- Quick Actions --- */

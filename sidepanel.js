@@ -30,6 +30,8 @@
   const selectionDismiss = document.getElementById('selection-dismiss');
   const chatInput = document.getElementById('chat-input');
   const sendBtn = document.getElementById('send-btn');
+  const exportChatBtn = document.getElementById('export-chat-btn');
+  const clearChatBtn = document.getElementById('clear-chat-btn');
 
   // --- Initialize ---
   async function init() {
@@ -553,6 +555,59 @@
     }
   });
 
+  // --- Export chat ---
+  function exportChat() {
+    if (chatHistory.length === 0) return;
+
+    const title = pageContent?.title || 'Chat';
+    const safeName = title.replace(/[^a-z0-9]+/gi, '-').substring(0, 50).toLowerCase();
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const filename = `chat-${safeName}-${timestamp}.md`;
+
+    const lines = [
+      '---',
+      `source: ${pageContent?.url || ''}`,
+      `title: "${(pageContent?.title || '').replace(/"/g, '\\"')}"`,
+      `exported: ${new Date().toISOString()}`,
+      `type: chat-export`,
+      `messages: ${chatHistory.length}`,
+      '---',
+      '',
+      `# Chat: ${title}`,
+      '',
+    ];
+
+    for (const msg of chatHistory) {
+      if (msg.role === 'user') {
+        lines.push(`**You:** ${msg.content}`, '');
+      } else {
+        lines.push(msg.content, '');
+      }
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  exportChatBtn.addEventListener('click', exportChat);
+
+  // --- Clear chat ---
+  function clearChat() {
+    if (isStreaming) return;
+    chatHistory = [];
+    chatMessages.innerHTML = '';
+    welcomeMessage.classList.remove('hidden');
+    chatMessages.appendChild(welcomeMessage);
+    clearSelection();
+  }
+
+  clearChatBtn.addEventListener('click', clearChat);
+
   // --- Keyboard Shortcuts ---
   document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd+Shift+C — copy last assistant response
@@ -580,13 +635,14 @@
     // Ctrl/Cmd+L — clear chat
     if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
       e.preventDefault();
-      if (!isStreaming) {
-        chatHistory = [];
-        chatMessages.innerHTML = '';
-        welcomeMessage.classList.remove('hidden');
-        chatMessages.appendChild(welcomeMessage);
-        clearSelection();
-      }
+      clearChat();
+      return;
+    }
+
+    // Ctrl/Cmd+E — export chat
+    if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+      e.preventDefault();
+      exportChat();
       return;
     }
 
