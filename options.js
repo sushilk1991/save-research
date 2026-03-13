@@ -32,6 +32,9 @@ const DEFAULT_SETTINGS = {
     enabled: true,
     savePdf: false,
   },
+  chat: {
+    showFab: true,
+  },
 };
 
 let settings = structuredClone(DEFAULT_SETTINGS);
@@ -47,6 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     settings.ai = { ...DEFAULT_SETTINGS.ai, ...(stored.settings.ai || {}) };
     settings.youtube = { ...DEFAULT_SETTINGS.youtube, ...(stored.settings.youtube || {}) };
     settings.twitter = { ...DEFAULT_SETTINGS.twitter, ...(stored.settings.twitter || {}) };
+    settings.chat = { ...DEFAULT_SETTINGS.chat, ...(stored.settings.chat || {}) };
   }
   render();
   bindEvents();
@@ -86,6 +90,9 @@ function render() {
   document.getElementById('yt-companion-url').value = settings.youtube.companionUrl;
   document.getElementById('yt-quality').value = settings.youtube.videoQuality;
   toggleCompanionSettings(settings.youtube.downloadVideo);
+
+  // Chat
+  document.getElementById('chat-show-fab').checked = settings.chat.showFab;
 
   // General
   document.getElementById('show-notifications').checked = settings.showNotifications;
@@ -238,6 +245,12 @@ function bindEvents() {
 
   // Test yt-dlp connection
   document.getElementById('test-ytdlp').addEventListener('click', testYtDlpConnection);
+
+  // Chat FAB toggle
+  document.getElementById('chat-show-fab').addEventListener('change', (e) => {
+    settings.chat.showFab = e.target.checked;
+    save();
+  });
 
   // Notifications
   document.getElementById('show-notifications').addEventListener('change', (e) => {

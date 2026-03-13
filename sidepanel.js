@@ -12,6 +12,12 @@
   let ollamaUrl = '';
   let ollamaModel = '';
   let abortController = null;
+  let cachedSystemPrompt = null; // Cached system prompt string
+  let activeTabId = null;        // Track which tab we're monitoring
+  let extractionGen = 0;         // Generation counter for stale extraction cancellation
+  let renderRAF = null;          // requestAnimationFrame ID for throttled rendering
+
+  const MAX_HISTORY = 20; // Cap chat history to prevent unbounded growth
 
   // --- DOM Elements ---
   const pageTitle = document.getElementById('page-title');
@@ -34,10 +40,14 @@
       ollamaModel = settingsResp.model;
     }
 
+    // Determine active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) activeTabId = tab.id;
+
     // Extract page content
     await extractContent();
 
-    // Check for any text selection on the page
+    // Check for any pending selection from FAB toggle
     const selResp = await chrome.runtime.sendMessage({ action: 'get-selection' });
     if (selResp?.ok && selResp.selection) {
       setSelection(selResp.selection);
@@ -45,10 +55,15 @@
   }
 
   async function extractContent() {
+    const gen = ++extractionGen;
+
     pageTitle.textContent = 'Extracting content...';
     contextPill.textContent = 'Loading...';
 
     const resp = await chrome.runtime.sendMessage({ action: 'extract-page-content' });
+
+    // Stale extraction — a newer one was started
+    if (gen !== extractionGen) return;
 
     if (!resp?.ok || !resp.data) {
       pageTitle.textContent = 'Could not extract content';
@@ -57,6 +72,7 @@
     }
 
     pageContent = resp.data;
+    cachedSystemPrompt = null; // Invalidate cached prompt
     currentUrl = pageContent.url;
 
     // Update header
@@ -92,12 +108,15 @@
 
   selectionDismiss.addEventListener('click', clearSelection);
 
-  // --- Build system prompt ---
+  // --- Build system prompt (cached) ---
   function buildSystemPrompt() {
+    if (cachedSystemPrompt !== null) return cachedSystemPrompt;
     if (!pageContent) return 'You are a helpful assistant.';
 
+    let prompt;
+
     if (pageContent.type === 'youtube') {
-      let prompt = 'You are a helpful assistant analyzing a YouTube video the user is watching.\n\n';
+      prompt = 'You are a helpful assistant analyzing a YouTube video the user is watching.\n\n';
       prompt += `Video: ${pageContent.title}\n`;
       if (pageContent.channel) prompt += `Channel: ${pageContent.channel}\n`;
       if (pageContent.duration) {
@@ -112,11 +131,8 @@
         prompt += `\n--- TRANSCRIPT ---\n${pageContent.transcript}\n---\n`;
       }
       prompt += '\nAnswer the user\'s questions about this video. Be concise and specific. When referencing the content, quote relevant parts. Use markdown formatting for lists and structure.';
-      return prompt;
-    }
-
-    if (pageContent.type === 'twitter') {
-      let prompt = 'You are a helpful assistant analyzing tweets the user is viewing.\n\n';
+    } else if (pageContent.type === 'twitter') {
+      prompt = 'You are a helpful assistant analyzing tweets the user is viewing.\n\n';
       if (pageContent.tweets && pageContent.tweets.length > 0) {
         prompt += '--- TWEETS ---\n';
         for (const tweet of pageContent.tweets) {
@@ -125,16 +141,17 @@
         prompt += '---\n';
       }
       prompt += '\nAnswer the user\'s questions about these tweets. Be concise and specific. Use markdown formatting.';
-      return prompt;
+    } else {
+      // General page
+      prompt = 'You are a helpful assistant analyzing the content of a web page the user is currently viewing.\n\n';
+      prompt += `Page Title: ${pageContent.title}\n`;
+      prompt += `URL: ${pageContent.url}\n`;
+      if (pageContent.author) prompt += `Author: ${pageContent.author}\n`;
+      prompt += `\n--- PAGE CONTENT ---\n${pageContent.content}\n---\n`;
+      prompt += '\nAnswer the user\'s questions about this content. Be concise and specific. When referencing the content, quote relevant parts. Use markdown formatting for lists and structure.';
     }
 
-    // General page
-    let prompt = 'You are a helpful assistant analyzing the content of a web page the user is currently viewing.\n\n';
-    prompt += `Page Title: ${pageContent.title}\n`;
-    prompt += `URL: ${pageContent.url}\n`;
-    if (pageContent.author) prompt += `Author: ${pageContent.author}\n`;
-    prompt += `\n--- PAGE CONTENT ---\n${pageContent.content}\n---\n`;
-    prompt += '\nAnswer the user\'s questions about this content. Be concise and specific. When referencing the content, quote relevant parts. Use markdown formatting for lists and structure.';
+    cachedSystemPrompt = prompt;
     return prompt;
   }
 
@@ -181,9 +198,7 @@
       // Blockquotes
       .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
       // Unordered lists
-      .replace(/^[*-] (.+)$/gm, '<li>$1</li>')
-      // Ordered lists
-      .replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+      .replace(/^[*-] (.+)$/gm, '<li>$1</li>');
 
     // Wrap consecutive <li> elements in <ul>
     html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
@@ -196,9 +211,6 @@
       if (/^<(h[1-3]|pre|ul|ol|blockquote|li)/.test(trimmed)) return trimmed;
       return `<p>${trimmed}</p>`;
     }).join('');
-
-    // Clean up single newlines within paragraphs
-    html = html.replace(/(?<!\n)\n(?!\n)/g, '<br>');
 
     return html;
   }
@@ -233,6 +245,11 @@
     // Save user message to history
     chatHistory.push({ role: 'user', content: userMessage });
 
+    // Cap history length
+    if (chatHistory.length > MAX_HISTORY) {
+      chatHistory = chatHistory.slice(-MAX_HISTORY);
+    }
+
     try {
       abortController = new AbortController();
 
@@ -243,7 +260,7 @@
           model: ollamaModel,
           messages,
           stream: true,
-          options: { temperature: 0.3, num_ctx: 131072 },
+          options: { temperature: 0.3 },
         }),
         signal: abortController.signal,
       });
@@ -252,10 +269,11 @@
         throw new Error(`Ollama returned HTTP ${resp.status}`);
       }
 
-      // Stream response
+      // Stream response with requestAnimationFrame throttling
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
+      let pendingRender = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -269,9 +287,15 @@
             const json = JSON.parse(line);
             if (json.message?.content) {
               fullResponse += json.message.content;
-              // Update bubble with rendered markdown
-              assistantBubble.innerHTML = renderMarkdown(fullResponse);
-              scrollToBottom();
+              // Throttle DOM updates with requestAnimationFrame
+              if (!pendingRender) {
+                pendingRender = true;
+                renderRAF = requestAnimationFrame(() => {
+                  assistantBubble.innerHTML = renderMarkdown(fullResponse);
+                  scrollToBottom();
+                  pendingRender = false;
+                });
+              }
             }
           } catch {
             // Skip malformed JSON lines
@@ -279,8 +303,19 @@
         }
       }
 
+      // Cancel any pending RAF
+      if (renderRAF) {
+        cancelAnimationFrame(renderRAF);
+        renderRAF = null;
+      }
+
       // Save assistant response to history
       chatHistory.push({ role: 'assistant', content: fullResponse });
+
+      // Cap history length
+      if (chatHistory.length > MAX_HISTORY) {
+        chatHistory = chatHistory.slice(-MAX_HISTORY);
+      }
 
       // Final render
       assistantBubble.innerHTML = renderMarkdown(fullResponse);
@@ -329,19 +364,28 @@
       errorText = `Model '${ollamaModel}' not available. Check your extension settings.`;
     }
 
-    div.innerHTML = `${errorText}<br><button class="retry-btn">Retry</button>`;
-    chatMessages.appendChild(div);
-    scrollToBottom();
+    // Use DOM API instead of innerHTML to prevent XSS
+    div.appendChild(document.createTextNode(errorText));
+    div.appendChild(document.createElement('br'));
 
-    div.querySelector('.retry-btn').addEventListener('click', () => {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => {
+      if (isStreaming) return; // Guard against concurrent retry
       div.remove();
-      // Retry last user message
-      const lastUserMsg = chatHistory.filter(m => m.role === 'user').pop();
-      if (lastUserMsg) {
-        chatHistory.pop(); // Remove the failed user message
+      // Find and remove the last user message from history
+      const lastUserIdx = chatHistory.findLastIndex(m => m.role === 'user');
+      if (lastUserIdx !== -1) {
+        const lastUserMsg = chatHistory[lastUserIdx];
+        chatHistory.splice(lastUserIdx, 1);
         sendMessage(lastUserMsg.content);
       }
     });
+    div.appendChild(retryBtn);
+
+    chatMessages.appendChild(div);
+    scrollToBottom();
   }
 
   function scrollToBottom() {
@@ -398,12 +442,14 @@
     }
   });
 
-  // Monitor tab URL changes — reset chat when URL changes
+  // Monitor tab URL changes — reset chat only for our active tab
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (tabId !== activeTabId) return; // Only react to our tab
     if (changeInfo.url && changeInfo.url !== currentUrl) {
       // URL changed — reset everything
       chatHistory = [];
       pageContent = null;
+      cachedSystemPrompt = null;
       selectionText = '';
       chatMessages.innerHTML = '';
       welcomeMessage.classList.remove('hidden');

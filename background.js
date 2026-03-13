@@ -34,6 +34,9 @@ const DEFAULT_SETTINGS = {
     enabled: true,
     savePdf: false,
   },
+  chat: {
+    showFab: true,
+  },
 };
 
 // --- File Type Maps ---
@@ -57,6 +60,7 @@ async function getSettings() {
   merged.ai = { ...DEFAULT_SETTINGS.ai, ...(settings?.ai || {}) };
   merged.youtube = { ...DEFAULT_SETTINGS.youtube, ...(settings?.youtube || {}) };
   merged.twitter = { ...DEFAULT_SETTINGS.twitter, ...(settings?.twitter || {}) };
+  merged.chat = { ...DEFAULT_SETTINGS.chat, ...(settings?.chat || {}) };
   return merged;
 }
 
@@ -1902,6 +1906,8 @@ async function notify(title, message) {
 // --- Chat Side Panel Helpers ---
 
 let _sidePanelOpenTabId = null;
+let _toggleInProgress = false;  // Mutex for toggle-sidepanel
+let _pendingSelection = null;   // Selection text pending pickup by side panel
 
 async function openSidePanel(tabId) {
   try {
@@ -1927,11 +1933,22 @@ async function closeSidePanel(tabId) {
 
 async function extractPageContent(tabId) {
   try {
-    // First inject Defuddle into the MAIN world so it's available to the page
+    // Inject Defuddle into the MAIN world (idempotent — checks if already loaded)
     await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      files: ['lib/defuddle.js'],
+      func: () => {
+        if (typeof Defuddle !== 'undefined') return 'already loaded';
+        return 'needs injection';
+      },
+    }).then(async (results) => {
+      if (results?.[0]?.result === 'needs injection') {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          files: ['lib/defuddle.js'],
+        });
+      }
     });
   } catch (err) {
     console.warn('[Save Research] Could not inject Defuddle:', err.message);
@@ -1946,50 +1963,6 @@ async function extractPageContent(tabId) {
     return results?.[0]?.result || null;
   } catch (err) {
     console.error('[Save Research] Content extraction failed:', err);
-    return null;
-  }
-}
-
-async function fetchYouTubeTranscriptForChat(captionTrackUrl, tabId) {
-  if (!captionTrackUrl) return null;
-  const transcriptUrl = captionTrackUrl + '&fmt=json3';
-
-  try {
-    let json3;
-    if (tabId) {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: async (url) => {
-          const r = await fetch(url);
-          if (!r.ok) return null;
-          return r.json();
-        },
-        args: [transcriptUrl],
-      });
-      json3 = results?.[0]?.result;
-    } else {
-      const resp = await fetch(transcriptUrl, { signal: AbortSignal.timeout(10000) });
-      if (!resp.ok) return null;
-      json3 = await resp.json();
-    }
-
-    if (!json3?.events) return null;
-
-    // Format transcript with timestamps
-    const lines = [];
-    for (const evt of json3.events) {
-      if (!evt.segs) continue;
-      const text = evt.segs.map(s => s.utf8 || '').join('').trim();
-      if (!text) continue;
-      const secs = Math.floor((evt.tStartMs || 0) / 1000);
-      const mm = String(Math.floor(secs / 60)).padStart(2, '0');
-      const ss = String(secs % 60).padStart(2, '0');
-      lines.push(`[${mm}:${ss}] ${text}`);
-    }
-    return lines.join('\n');
-  } catch (err) {
-    console.warn('[Save Research] Chat transcript fetch failed:', err.message);
     return null;
   }
 }
@@ -2038,6 +2011,9 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 
 // Handle messages from popup, options page, and chat
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Only accept messages from our own extension
+  if (sender.id !== chrome.runtime.id) return;
+
   if (msg.action === 'savePage') {
     (async () => {
       const settings = await getSettings();
@@ -2109,23 +2085,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- Chat Side Panel Actions ---
 
   if (msg.action === 'toggle-sidepanel') {
+    if (_toggleInProgress) return false;
+    _toggleInProgress = true;
     (async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab) return;
-      if (_sidePanelOpenTabId === tab.id) {
-        await closeSidePanel(tab.id);
-      } else {
-        await openSidePanel(tab.id);
-        // If selection was included, forward it to the side panel after a short delay
-        // (panel needs time to load)
-        if (msg.selection) {
-          setTimeout(() => {
-            chrome.runtime.sendMessage({
-              action: 'sr-chat-selection',
-              selection: msg.selection,
-            }).catch(() => {});
-          }, 500);
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab) return;
+        if (_sidePanelOpenTabId === tab.id) {
+          await closeSidePanel(tab.id);
+        } else {
+          // Store selection for side panel to pick up during init
+          _pendingSelection = msg.selection || null;
+          await openSidePanel(tab.id);
         }
+      } finally {
+        _toggleInProgress = false;
       }
     })();
     return false;
@@ -2140,7 +2114,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       const content = await extractPageContent(tab.id);
       if (content && content.type === 'youtube' && content.captionTrackUrl) {
-        content.transcript = await fetchYouTubeTranscriptForChat(content.captionTrackUrl, tab.id);
+        const json3 = await fetchTranscript(content.captionTrackUrl, tab.id);
+        content.transcript = json3 ? formatTranscript(json3) : null;
       }
       sendResponse({ ok: true, data: content });
     })().catch(err => sendResponse({ ok: false, error: err.message }));
@@ -2159,7 +2134,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === 'get-panel-state') {
+    const tabId = sender.tab?.id;
+    sendResponse({ ok: true, open: _sidePanelOpenTabId === tabId });
+    return false;
+  }
+
   if (msg.action === 'get-selection') {
+    // Check pending selection from FAB toggle first
+    if (_pendingSelection) {
+      const sel = _pendingSelection;
+      _pendingSelection = null;
+      sendResponse({ ok: true, selection: sel });
+      return true;
+    }
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab) {

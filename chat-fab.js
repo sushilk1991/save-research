@@ -143,6 +143,43 @@
     }
   });
 
-  // --- Init ---
-  createFab();
+  // --- Sync FAB icon when tab becomes visible (fixes desync on tab switch) ---
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      chrome.runtime.sendMessage({ action: 'get-panel-state' }).then((resp) => {
+        if (resp?.ok) updateFabIcon(resp.open);
+      }).catch(() => {});
+    }
+  });
+
+  function removeFab() {
+    if (hostEl) {
+      hostEl.remove();
+      hostEl = null;
+      shadowRoot = null;
+    }
+  }
+
+  // --- React to setting changes ---
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.settings) {
+      const showFab = changes.settings.newValue?.chat?.showFab ?? true;
+      if (showFab && !hostEl) {
+        createFab();
+      } else if (!showFab && hostEl) {
+        removeFab();
+      }
+    }
+  });
+
+  // --- Init: check setting before showing FAB ---
+  (async () => {
+    try {
+      const { settings } = await chrome.storage.sync.get('settings');
+      const showFab = settings?.chat?.showFab ?? true;
+      if (showFab) createFab();
+    } catch {
+      createFab();
+    }
+  })();
 })();

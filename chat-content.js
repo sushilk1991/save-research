@@ -102,7 +102,7 @@
       type: 'page',
       title: document.title,
       author: '',
-      content: document.body.innerText.substring(0, 100000),
+      content: document.body.textContent.substring(0, 100000),
       url: window.location.href,
       domain: window.location.hostname,
       wordCount: 0,
