@@ -521,3 +521,203 @@ body {
   width: 12px;
   height: 12px;
 }
+
+/* ============================================================
+   Dark Mode
+   ============================================================ */
+body.dark {
+  background: #111827;
+  color: #e5e7eb;
+}
+
+body.dark .panel-header {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+
+body.dark .header-title {
+  color: #f3f4f6;
+}
+
+body.dark .context-bar {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+
+body.dark .context-pill {
+  background: #064e3b;
+  color: #6ee7b7;
+}
+
+body.dark .context-action-btn {
+  color: #6b7280;
+}
+
+body.dark .context-action-btn:hover {
+  color: #e5e7eb;
+  background: #374151;
+}
+
+body.dark .tab-bar {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+
+body.dark .tab {
+  color: #9ca3af;
+}
+
+body.dark .tab:hover {
+  color: #e5e7eb;
+}
+
+body.dark .tab.active {
+  color: #6ee7b7;
+  border-bottom-color: #6ee7b7;
+}
+
+body.dark .outline-item {
+  color: #d1d5db;
+}
+
+body.dark .outline-item:hover {
+  background: #374151;
+}
+
+body.dark .outline-item.level-4,
+body.dark .outline-item.level-5 {
+  color: #9ca3af;
+}
+
+body.dark .outline-item.level-6 {
+  color: #6b7280;
+}
+
+body.dark .quick-actions {
+  background: #1f2937;
+  border-top-color: #374151;
+}
+
+body.dark .chip {
+  background: #1f2937;
+  border-color: #4b5563;
+  color: #d1d5db;
+}
+
+body.dark .chip:hover {
+  background: #064e3b;
+  border-color: #6ee7b7;
+  color: #6ee7b7;
+}
+
+body.dark .chat-messages {
+  background: #111827;
+}
+
+body.dark .message.user {
+  background: #0d9488;
+  color: #fff;
+}
+
+body.dark .message.assistant {
+  background: #1f2937;
+  color: #e5e7eb;
+}
+
+body.dark .message.assistant code {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+body.dark .message.assistant pre {
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+body.dark .message.assistant blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
+}
+
+body.dark .message.error {
+  background: #450a0a;
+  color: #fca5a5;
+  border-color: #7f1d1d;
+}
+
+body.dark .message.error .retry-btn {
+  border-color: #fca5a5;
+  background: #1f2937;
+  color: #fca5a5;
+}
+
+body.dark .selection-quote {
+  background: #1f2937;
+  border-top-color: #374151;
+}
+
+body.dark .selection-text {
+  color: #9ca3af;
+}
+
+body.dark .selection-dismiss {
+  color: #6b7280;
+}
+
+body.dark .selection-dismiss:hover {
+  color: #e5e7eb;
+}
+
+body.dark .input-area {
+  background: #1f2937;
+  border-top-color: #374151;
+}
+
+body.dark #chat-input {
+  background: #111827;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+body.dark #chat-input:focus {
+  border-color: #6ee7b7;
+}
+
+body.dark #chat-input::placeholder {
+  color: #6b7280;
+}
+
+body.dark .send-btn {
+  background: #0d9488;
+}
+
+body.dark .send-btn:hover {
+  background: #0f766e;
+}
+
+body.dark .message-action-btn {
+  border-color: #4b5563;
+  color: #9ca3af;
+}
+
+body.dark .message-action-btn:hover {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+body.dark .message-action-btn.copied {
+  color: #6ee7b7;
+  border-color: #6ee7b7;
+}
+
+body.dark .loading-dots span {
+  background: #6b7280;
+}
+
+body.dark .welcome-message {
+  color: #6b7280;
+}
+
+body.dark .outline-empty {
+  color: #6b7280;
+}

@@ -37,6 +37,40 @@
   const outlineList = document.getElementById('outline-list');
   const outlineEmpty = document.getElementById('outline-empty');
   let activeTab = 'chat';
+  const themeToggleBtn = document.getElementById('theme-toggle-btn');
+  const themeIcon = document.getElementById('theme-icon');
+
+  // --- Theme ---
+  const SUN_PATH = 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z';
+  const MOON_PATH = 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z';
+
+  function applyTheme(dark) {
+    document.body.classList.toggle('dark', dark);
+    if (themeIcon) {
+      themeIcon.querySelector('path').setAttribute('d', dark ? SUN_PATH : MOON_PATH);
+    }
+  }
+
+  function initTheme() {
+    const stored = localStorage.getItem('sr-theme');
+    if (stored === 'dark') {
+      applyTheme(true);
+    } else if (stored === 'light') {
+      applyTheme(false);
+    } else {
+      // Follow system preference
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      applyTheme(prefersDark);
+    }
+  }
+
+  themeToggleBtn.addEventListener('click', () => {
+    const isDark = document.body.classList.contains('dark');
+    applyTheme(!isDark);
+    localStorage.setItem('sr-theme', isDark ? 'light' : 'dark');
+  });
+
+  initTheme();
 
   // --- Initialize ---
   async function init() {
