@@ -1899,6 +1899,101 @@ async function notify(title, message) {
   });
 }
 
+// --- Chat Side Panel Helpers ---
+
+let _sidePanelOpenTabId = null;
+
+async function openSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.open({ tabId });
+    _sidePanelOpenTabId = tabId;
+    chrome.tabs.sendMessage(tabId, { action: 'sr-chat-panel-state', open: true }).catch(() => {});
+  } catch (err) {
+    console.warn('[Save Research] Could not open side panel:', err.message);
+  }
+}
+
+async function closeSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.setOptions({ tabId, enabled: false });
+    // Re-enable for future use
+    await chrome.sidePanel.setOptions({ tabId, enabled: true });
+    _sidePanelOpenTabId = null;
+    chrome.tabs.sendMessage(tabId, { action: 'sr-chat-panel-state', open: false }).catch(() => {});
+  } catch (err) {
+    console.warn('[Save Research] Could not close side panel:', err.message);
+  }
+}
+
+async function extractPageContent(tabId) {
+  try {
+    // First inject Defuddle into the MAIN world so it's available to the page
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      files: ['lib/defuddle.js'],
+    });
+  } catch (err) {
+    console.warn('[Save Research] Could not inject Defuddle:', err.message);
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      files: ['chat-content.js'],
+    });
+    return results?.[0]?.result || null;
+  } catch (err) {
+    console.error('[Save Research] Content extraction failed:', err);
+    return null;
+  }
+}
+
+async function fetchYouTubeTranscriptForChat(captionTrackUrl, tabId) {
+  if (!captionTrackUrl) return null;
+  const transcriptUrl = captionTrackUrl + '&fmt=json3';
+
+  try {
+    let json3;
+    if (tabId) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (url) => {
+          const r = await fetch(url);
+          if (!r.ok) return null;
+          return r.json();
+        },
+        args: [transcriptUrl],
+      });
+      json3 = results?.[0]?.result;
+    } else {
+      const resp = await fetch(transcriptUrl, { signal: AbortSignal.timeout(10000) });
+      if (!resp.ok) return null;
+      json3 = await resp.json();
+    }
+
+    if (!json3?.events) return null;
+
+    // Format transcript with timestamps
+    const lines = [];
+    for (const evt of json3.events) {
+      if (!evt.segs) continue;
+      const text = evt.segs.map(s => s.utf8 || '').join('').trim();
+      if (!text) continue;
+      const secs = Math.floor((evt.tStartMs || 0) / 1000);
+      const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+      const ss = String(secs % 60).padStart(2, '0');
+      lines.push(`[${mm}:${ss}] ${text}`);
+    }
+    return lines.join('\n');
+  } catch (err) {
+    console.warn('[Save Research] Chat transcript fetch failed:', err.message);
+    return null;
+  }
+}
+
 // --- Event Listeners ---
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1923,7 +2018,25 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 });
 
-// Handle messages from popup and options page
+// Reset side panel state when tracked tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (_sidePanelOpenTabId === tabId) {
+    _sidePanelOpenTabId = null;
+  }
+});
+
+// Reset side panel state when active tab changes
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (_sidePanelOpenTabId && _sidePanelOpenTabId !== tabId) {
+    chrome.tabs.sendMessage(_sidePanelOpenTabId, {
+      action: 'sr-chat-panel-state',
+      open: false,
+    }).catch(() => {});
+    _sidePanelOpenTabId = null;
+  }
+});
+
+// Handle messages from popup, options page, and chat
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'savePage') {
     (async () => {
@@ -1990,6 +2103,79 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       sendResponse({ ok: true, models, modelExists, testPassed, testError });
     })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  // --- Chat Side Panel Actions ---
+
+  if (msg.action === 'toggle-sidepanel') {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+      if (_sidePanelOpenTabId === tab.id) {
+        await closeSidePanel(tab.id);
+      } else {
+        await openSidePanel(tab.id);
+        // If selection was included, forward it to the side panel after a short delay
+        // (panel needs time to load)
+        if (msg.selection) {
+          setTimeout(() => {
+            chrome.runtime.sendMessage({
+              action: 'sr-chat-selection',
+              selection: msg.selection,
+            }).catch(() => {});
+          }, 500);
+        }
+      }
+    })();
+    return false;
+  }
+
+  if (msg.action === 'extract-page-content') {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) {
+        sendResponse({ ok: false, error: 'No active tab' });
+        return;
+      }
+      const content = await extractPageContent(tab.id);
+      if (content && content.type === 'youtube' && content.captionTrackUrl) {
+        content.transcript = await fetchYouTubeTranscriptForChat(content.captionTrackUrl, tab.id);
+      }
+      sendResponse({ ok: true, data: content });
+    })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.action === 'get-ollama-settings') {
+    (async () => {
+      const settings = await getSettings();
+      sendResponse({
+        ok: true,
+        ollamaUrl: settings.ai.ollamaUrl,
+        model: settings.ai.model,
+      });
+    })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.action === 'get-selection') {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) {
+        sendResponse({ ok: true, selection: '' });
+        return;
+      }
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => window.getSelection()?.toString()?.trim() || '',
+        });
+        sendResponse({ ok: true, selection: results?.[0]?.result || '' });
+      } catch {
+        sendResponse({ ok: true, selection: '' });
+      }
+    })().catch(() => sendResponse({ ok: true, selection: '' }));
     return true;
   }
 });

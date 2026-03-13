@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="sidepanel.css">
+  <title>Save Research Chat</title>
+</head>
+<body>
+  <div class="panel">
+    <!-- Header -->
+    <div class="panel-header">
+      <div class="header-info">
+        <span class="header-title" id="page-title">Loading...</span>
+      </div>
+    </div>
+
+    <!-- Context indicator -->
+    <div class="context-bar" id="context-bar">
+      <span class="context-pill" id="context-pill"></span>
+    </div>
+
+    <!-- Quick action chips -->
+    <div class="quick-actions" id="quick-actions">
+      <button class="chip" data-prompt="Summarize this content in a few paragraphs">Summarize</button>
+      <button class="chip" data-prompt="What are the key takeaways from this content? List them as bullet points">Key takeaways</button>
+      <button class="chip" data-prompt="Create concise bullet points covering all the main points">Bullet points</button>
+      <button class="chip" data-prompt="Explain this content in simple terms, as if I'm five years old">ELI5</button>
+    </div>
+
+    <!-- Chat messages -->
+    <div class="chat-messages" id="chat-messages">
+      <div class="welcome-message" id="welcome-message">
+        <p>Ask anything about this page.</p>
+      </div>
+    </div>
+
+    <!-- Selection quote -->
+    <div class="selection-quote hidden" id="selection-quote">
+      <span class="selection-text" id="selection-text"></span>
+      <button class="selection-dismiss" id="selection-dismiss" aria-label="Dismiss selection">&times;</button>
+    </div>
+
+    <!-- Input area -->
+    <div class="input-area">
+      <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
+      <button id="send-btn" class="send-btn" aria-label="Send message" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
