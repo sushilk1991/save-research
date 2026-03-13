@@ -28,11 +28,23 @@
       </div>
     </div>
 
+    <!-- Tab bar -->
+    <div class="tab-bar" id="tab-bar">
+      <button class="tab active" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="outline">Outline</button>
+    </div>
+
     <!-- Chat messages -->
     <div class="chat-messages" id="chat-messages">
       <div class="welcome-message" id="welcome-message">
         <p>Ask anything about this page.</p>
       </div>
+    </div>
+
+    <!-- Outline view -->
+    <div class="outline-view hidden" id="outline-view">
+      <div class="outline-empty" id="outline-empty">No headings found on this page.</div>
+      <ul class="outline-list" id="outline-list"></ul>
     </div>
 
     <!-- Selection quote -->

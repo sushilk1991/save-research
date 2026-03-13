@@ -32,6 +32,11 @@
   const sendBtn = document.getElementById('send-btn');
   const exportChatBtn = document.getElementById('export-chat-btn');
   const clearChatBtn = document.getElementById('clear-chat-btn');
+  const tabBar = document.getElementById('tab-bar');
+  const outlineView = document.getElementById('outline-view');
+  const outlineList = document.getElementById('outline-list');
+  const outlineEmpty = document.getElementById('outline-empty');
+  let activeTab = 'chat';
 
   // --- Initialize ---
   async function init() {
@@ -581,6 +586,67 @@
       extractContent();
     }
   });
+
+  // --- Tab Switching ---
+  function switchTab(tab) {
+    activeTab = tab;
+    for (const btn of tabBar.querySelectorAll('.tab')) {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    }
+
+    const chatVisible = tab === 'chat';
+    chatMessages.style.display = chatVisible ? '' : 'none';
+    quickActions.style.display = chatVisible ? '' : 'none';
+    selectionQuote.style.display = chatVisible ? '' : 'none';
+    document.querySelector('.input-area').style.display = chatVisible ? '' : 'none';
+    outlineView.classList.toggle('hidden', chatVisible);
+
+    if (tab === 'outline') {
+      renderOutline();
+    }
+  }
+
+  tabBar.addEventListener('click', (e) => {
+    const tab = e.target.dataset?.tab;
+    if (tab) switchTab(tab);
+  });
+
+  // --- Outline ---
+  function renderOutline() {
+    outlineList.innerHTML = '';
+
+    if (!pageContent?.content) {
+      outlineEmpty.style.display = '';
+      return;
+    }
+
+    const headings = typeof extractHeadings === 'function'
+      ? extractHeadings(pageContent.content)
+      : [];
+
+    if (headings.length === 0) {
+      outlineEmpty.style.display = '';
+      return;
+    }
+
+    outlineEmpty.style.display = 'none';
+
+    for (const heading of headings) {
+      const li = document.createElement('li');
+      li.className = `outline-item level-${heading.level}`;
+      li.textContent = heading.text;
+      li.addEventListener('click', () => {
+        // Ask about this heading in chat
+        switchTab('chat');
+        const prompt = `Explain the section "${heading.text}" in detail`;
+        chatInput.value = prompt;
+        autoResize();
+        updateInputState();
+        chatInput.focus();
+      });
+      outlineList.appendChild(li);
+    }
+  }
 
   // --- Export chat ---
   function exportChat() {
