@@ -295,46 +295,7 @@
     return messages;
   }
 
-  // --- Simple Markdown renderer ---
-  function renderMarkdown(text) {
-    // Escape HTML first to prevent XSS
-    let escaped = text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-
-    let html = escaped
-      // Code blocks (must be before inline code)
-      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-      // Inline code
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // Bold
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      // Italic
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      // Headers
-      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-      // Blockquotes
-      .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
-      // Unordered lists
-      .replace(/^[*-] (.+)$/gm, '<li>$1</li>');
-
-    // Wrap consecutive <li> elements in <ul>
-    html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-    // Paragraphs: split on double newlines
-    html = html.split(/\n{2,}/).map(block => {
-      const trimmed = block.trim();
-      if (!trimmed) return '';
-      // Don't wrap blocks that are already HTML elements
-      if (/^<(h[1-3]|pre|ul|ol|blockquote|li)/.test(trimmed)) return trimmed;
-      return `<p>${trimmed}</p>`;
-    }).join('');
-
-    return html;
-  }
+  // Markdown renderer is loaded from lib/markdown.js
 
   // --- Send message ---
   async function sendMessage(text) {
