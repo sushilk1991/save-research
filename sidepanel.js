@@ -39,6 +39,7 @@
   const outlineList = document.getElementById('outline-list');
   const outlineEmpty = document.getElementById('outline-empty');
   let activeTab = 'chat';
+  const snapshotBtn = document.getElementById('snapshot-btn');
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
   const themeIcon = document.getElementById('theme-icon');
   const statsView = document.getElementById('stats-view');
@@ -143,6 +144,65 @@
     clearTimeout(saveDebounce);
     saveDebounce = setTimeout(saveChatHistory, 500);
   }
+
+  // --- Content Snapshots ---
+  const SNAPSHOT_KEY_PREFIX = 'sr-snapshot-';
+
+  function getSnapshotKey() {
+    if (!currentUrl) return null;
+    try {
+      const url = new URL(currentUrl);
+      const key = (url.hostname + url.pathname).replace(/[^a-z0-9]/gi, '-').substring(0, 100);
+      return SNAPSHOT_KEY_PREFIX + key;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveSnapshot() {
+    if (!pageContent?.content) return;
+    const key = getSnapshotKey();
+    if (!key) return;
+
+    await chrome.storage.local.set({
+      [key]: {
+        content: pageContent.content.substring(0, 50000), // Limit size
+        title: pageContent.title,
+        url: currentUrl,
+        timestamp: Date.now(),
+      }
+    });
+
+    // Visual feedback
+    snapshotBtn.style.color = '#059669';
+    setTimeout(() => { snapshotBtn.style.color = ''; }, 1500);
+  }
+
+  async function compareWithSnapshot() {
+    const key = getSnapshotKey();
+    if (!key || !pageContent?.content) return null;
+
+    try {
+      const result = await chrome.storage.local.get(key);
+      const snapshot = result[key];
+      if (!snapshot?.content) return null;
+
+      if (typeof diffLines !== 'function') return null;
+
+      const diff = diffLines(snapshot.content, pageContent.content);
+      const summary = typeof diffSummary === 'function' ? diffSummary(diff) : null;
+
+      return {
+        diff,
+        summary,
+        snapshotDate: new Date(snapshot.timestamp),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  snapshotBtn.addEventListener('click', saveSnapshot);
 
   // --- Theme ---
   const SUN_PATH = 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z';
@@ -884,7 +944,7 @@
   }
 
   // --- Quick Actions ---
-  function populateQuickActions() {
+  async function populateQuickActions() {
     quickActions.innerHTML = '';
 
     if (!pageContent || typeof getQuickActions !== 'function') {
@@ -908,6 +968,39 @@
     const actions = getQuickActions(pageContent.type, meta);
     for (const action of actions) {
       quickActions.appendChild(createChip(action));
+    }
+
+    // Check if a snapshot exists and add "What changed?" chip
+    const snapshotKey = getSnapshotKey();
+    if (snapshotKey) {
+      try {
+        const result = await chrome.storage.local.get(snapshotKey);
+        if (result[snapshotKey]) {
+          const changedChip = createChip({
+            label: 'What changed?',
+            prompt: '__diff__', // Special marker
+          });
+          changedChip.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const comparison = await compareWithSnapshot();
+            if (!comparison) {
+              appendMessage('assistant', 'No previous snapshot found or diff not available.');
+              return;
+            }
+            if (comparison.summary.added === 0 && comparison.summary.removed === 0) {
+              appendMessage('assistant', 'No changes detected since the last snapshot.');
+              return;
+            }
+
+            welcomeMessage.classList.add('hidden');
+            const msg = `**Changes since ${comparison.snapshotDate.toLocaleDateString()}:**\n\n${comparison.summary.summary}\n\nWould you like me to summarize the new content?`;
+            appendMessage('assistant', msg);
+          }, { once: true });
+          quickActions.insertBefore(changedChip, quickActions.firstChild);
+        }
+      } catch {
+        // Ignore storage errors
+      }
     }
   }
 
