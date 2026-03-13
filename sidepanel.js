@@ -78,17 +78,25 @@
     // Update header
     pageTitle.textContent = pageContent.title || pageContent.url;
 
-    // Update context pill
+    // Update context pill with reading/watch time
     if (pageContent.type === 'youtube') {
-      const mins = Math.floor((pageContent.duration || 0) / 60);
+      const watchInfo = typeof estimateWatchTime === 'function'
+        ? estimateWatchTime(pageContent.duration || 0)
+        : { label: Math.floor((pageContent.duration || 0) / 60) + 'm' };
       const hasTx = pageContent.transcript ? 'transcript loaded' : 'no transcript';
-      contextPill.textContent = `YouTube \u00B7 ${mins}m \u00B7 ${hasTx}`;
+      contextPill.textContent = `YouTube \u00B7 ${watchInfo.label} \u00B7 ${hasTx}`;
     } else if (pageContent.type === 'twitter') {
       const count = pageContent.tweets?.length || 0;
       contextPill.textContent = `Twitter \u00B7 ${count} tweet${count !== 1 ? 's' : ''}`;
     } else {
-      const wc = pageContent.wordCount || 0;
-      contextPill.textContent = wc > 0 ? `Page \u00B7 ${wc.toLocaleString()} words` : `Page \u00B7 ${pageContent.domain}`;
+      const readInfo = typeof estimateReadingTime === 'function'
+        ? estimateReadingTime(pageContent.content || '')
+        : { label: '', words: pageContent.wordCount || 0 };
+      const parts = ['Page'];
+      if (readInfo.label) parts.push(readInfo.label);
+      if (readInfo.words > 0) parts.push(`${readInfo.words.toLocaleString()} words`);
+      else if (pageContent.domain) parts.push(pageContent.domain);
+      contextPill.textContent = parts.join(' \u00B7 ');
     }
   }
 

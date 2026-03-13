@@ -20,14 +20,6 @@
       <span class="context-pill" id="context-pill"></span>
     </div>
 
-    <!-- Quick action chips -->
-    <div class="quick-actions" id="quick-actions">
-      <button class="chip" data-prompt="Summarize this content in a few paragraphs">Summarize</button>
-      <button class="chip" data-prompt="What are the key takeaways from this content? List them as bullet points">Key takeaways</button>
-      <button class="chip" data-prompt="Create concise bullet points covering all the main points">Bullet points</button>
-      <button class="chip" data-prompt="Explain this content in simple terms, as if I'm five years old">ELI5</button>
-    </div>
-
     <!-- Chat messages -->
     <div class="chat-messages" id="chat-messages">
       <div class="welcome-message" id="welcome-message">
@@ -41,6 +33,14 @@
       <button class="selection-dismiss" id="selection-dismiss" aria-label="Dismiss selection">&times;</button>
     </div>
 
+    <!-- Quick action chips -->
+    <div class="quick-actions" id="quick-actions">
+      <button class="chip" data-prompt="Summarize this content in a few paragraphs">Summarize</button>
+      <button class="chip" data-prompt="What are the key takeaways from this content? List them as bullet points">Key takeaways</button>
+      <button class="chip" data-prompt="Create concise bullet points covering all the main points">Bullet points</button>
+      <button class="chip" data-prompt="Explain this content in simple terms, as if I'm five years old">ELI5</button>
+    </div>
+
     <!-- Input area -->
     <div class="input-area">
       <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
@@ -50,6 +50,7 @@
     </div>
   </div>
 
+  <script src="lib/content-utils.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

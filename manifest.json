@@ -45,7 +45,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["lib/defuddle.js"],
+      "resources": ["lib/defuddle.js", "lib/content-utils.js"],
       "matches": ["<all_urls>"]
     }
   ]
